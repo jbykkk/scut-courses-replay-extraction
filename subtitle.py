@@ -4,7 +4,32 @@ from pathlib import Path
 from config import OUTPUT_DIR
 
 
+def extract_subtitle_items(body) -> list[dict] | None:
+    """从 JSON 响应中提取有效字幕列表，支持多层嵌套。"""
+    if isinstance(body, list):
+        if body and all(isinstance(item, dict) for item in body):
+            if any("BeginSec" in item and "Text" in item for item in body):
+                return body
+        for item in body:
+            if isinstance(item, (dict, list)):
+                inner = extract_subtitle_items(item)
+                if inner:
+                    return inner
+        return None
+    if isinstance(body, dict):
+        for key in ("all_content", "data", "result", "list", "rows"):
+            value = body.get(key)
+            if isinstance(value, (dict, list)):
+                inner = extract_subtitle_items(value)
+                if inner:
+                    return inner
+    return None
+
+
 def format_time(seconds: float) -> str:
+    seconds = float(seconds)
+    if seconds < 0:
+        raise ValueError("字幕时间不能为负数")
     h = int(seconds) // 3600
     m = (int(seconds) % 3600) // 60
     s = int(seconds) % 60
@@ -14,14 +39,24 @@ def format_time(seconds: float) -> str:
 
 def json_to_srt(subtitle_json: list[dict]) -> str:
     lines = []
-    for i, item in enumerate(subtitle_json, 1):
-        begin = item.get("BeginSec", 0)
-        end = item.get("EndSec", begin + 5)
-        text = item.get("Text", "").strip()
+    index = 0
+    for item in subtitle_json:
+        raw_text = item.get("Text", "")
+        text = raw_text.strip() if isinstance(raw_text, str) else ""
         if not text:
             continue
 
-        lines.append(str(i))
+        try:
+            begin = float(item.get("BeginSec", 0))
+            raw_end = item.get("EndSec")
+            end = float(raw_end) if raw_end is not None else begin + 5
+            if begin < 0 or end < begin:
+                continue
+        except (TypeError, ValueError):
+            continue
+
+        index += 1
+        lines.append(str(index))
         lines.append(f"{format_time(begin)} --> {format_time(end)}")
         lines.append(text)
         lines.append("")
@@ -33,7 +68,7 @@ def json_to_text(subtitle_json: list[dict]) -> str:
     return "\n".join(
         item.get("Text", "").strip()
         for item in subtitle_json
-        if item.get("Text", "").strip()
+        if isinstance(item.get("Text", ""), str) and item.get("Text", "").strip()
     )
 
 
@@ -46,8 +81,10 @@ def save_subtitle(
     for d in (json_dir, srt_dir, txt_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in (course_name or sub_id))
-    base_name = f"{safe_name}_{sub_id}"
+    safe_name = "".join(
+        c if c.isalnum() or c in "-_" else "_" for c in (course_name or sub_id)
+    )
+    base_name = f"{safe_name}_{sub_id}" if course_name else str(sub_id)
 
     json_path = json_dir / f"{base_name}.json"
     with open(json_path, "w", encoding="utf-8") as f:

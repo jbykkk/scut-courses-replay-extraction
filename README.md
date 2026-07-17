@@ -2,7 +2,16 @@
 
 ![](./assets/figures/icon.png)
 
-从华南理工大学“百步梯学堂”中提供的课程回放平台“华园视频”提取**课程回放字幕**，支持 JSON、SRT、纯文本三种格式，可批量导出同一课程字幕并打包为ZIP。
+从华南理工大学“百步梯学堂”中提供的课程回放平台“华园视频”提取**课程回放字幕**，支持 JSON、SRT、纯文本三种格式，可批量导出同一课程字幕并打包为 ZIP。
+
+本项目会根据课程链接自动选择正确入口：
+
+| 使用环境 | 站点 |
+|------|------|
+| 校内网络 | `https://video.jw.scut.edu.cn` |
+| 校外网络 | `https://video-jw-443.webvpn.scut.edu.cn` |
+
+校外入口由学校 WebVPN 代理校内站点。程序不会绕过 WebVPN 或学校统一认证；使用前仍需由本人正常登录并拥有相应课程的访问权限。
 
 提供两种使用方式：**Chrome/Edge 浏览器插件**和**命令行工具**。
 
@@ -37,11 +46,11 @@ Microsoft Edge 插件安装同理。
 
 ### 使用
 
-> **前提**：必须先在华园视频网站进行华工统一认证完成登录。
+> **前提**：必须先在当前使用的华园视频入口完成登录。校外使用时要先登录 WebVPN，校内和校外登录状态不能互相替代。
 
 #### 单课时下载
 
-1. 打开任意课程播放页面（网址URL应如下：`video.jw.scut.edu.cn/livingroom?...`）
+1. 打开任意课程播放页面：校内地址为 `video.jw.scut.edu.cn/livingroom?...`，校外地址为 `video-jw-443.webvpn.scut.edu.cn/livingroom?...`
 2. 点击浏览器右上角的插件图标，弹窗显示当前课时信息（课程名、教师、课时标题）
 3. 勾选格式（`SRT / TXT / JSON`），点击 **下载字幕**
 
@@ -65,8 +74,10 @@ Microsoft Edge 插件安装同理。
 **弹窗显示"请先打开课程播放页面"**
 当前标签页不是华园视频的课程播放页，请先打开一个课程页面。
 
+如果刚更新过插件，请进入 `chrome://extensions/`，找到本插件并点击“重新加载”，再刷新课程页面。
+
 **下载失败或显示 HTTP 错误**
-登录状态可能已过期，请在华园视频网站重新登录后重试。
+登录状态可能已过期，请在当前使用的入口重新登录后重试。校外入口应重新登录 WebVPN，不能只登录校内站点。401、403 或“接口未返回 JSON”通常表示登录失效；404 通常表示课程链接或接口路径发生变化。
 
 **部分课时没有字幕**
 新录制的课程可能尚未生成字幕，或该课时没有语音内容。失败的课时会显示在下载结果中，同时输出到浏览器控制台。
@@ -92,8 +103,11 @@ uv run playwright install chromium
 ### 使用
 
 ```bash
-# 1. 扫码登录（只需一次）
-uv run python main.py login
+# 1. 登录校外 WebVPN（默认，可省略 --site external）
+uv run python main.py login --site external
+
+# 如果在校内网络使用，则单独登录校内站点
+uv run python main.py login --site internal
 
 # 2. 获取单节课字幕（粘贴课程链接）
 uv run python main.py get "https://video.jw.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
@@ -105,6 +119,22 @@ uv run python main.py get
 
 # 3. 批量导出整门课程
 uv run python main.py get --all "https://video.jw.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
+
+# 校外链接会被自动识别，不需要额外的站点参数
+uv run python main.py get "https://video-jw-443.webvpn.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
+```
+
+CLI 会分别保存登录状态：
+
+| 站点 | 登录状态文件 |
+|------|------|
+| 校内 | `data/auth_state_internal.json` |
+| 校外 WebVPN | `data/auth_state_external.json` |
+
+这些文件包含会话 Cookie，不能发给他人，也不要提交到 Git。需要查看最终课程页、字幕接口和课程目录接口地址时，在命令最前面加 `--verbose`：
+
+```bash
+uv run python main.py --verbose get "课程链接"
 ```
 
 ### 输出
@@ -141,12 +171,13 @@ uv run python main.py get --all "https://video.jw.scut.edu.cn/livingroom?course_
 ├── main.py              # CLI 入口
 ├── browser.py           # Playwright 浏览器管理与网络拦截
 ├── subtitle.py          # JSON → SRT/TXT 格式转换
-├── config.py            # URL 与配置常量
+├── config.py            # 校内外站点、课程 URL 解析与配置常量
 ├── auth.py              # 登录状态管理
 ├── extension/           # Chrome 插件
 │   ├── manifest.json
 │   ├── popup.html
-│   ├── popup.js
+│   ├── core.js          # 可测试的 URL/API/字幕纯函数
+│   ├── popup.js         # 请求、页面内回退与交互逻辑
 │   └── jszip.min.js
 ├── output/              # 字幕输出（CLI）
 │   ├── json/
@@ -160,10 +191,12 @@ uv run python main.py get --all "https://video.jw.scut.edu.cn/livingroom?course_
 ## 已知限制
 
 - **CLI 需要有头浏览器** — headless 模式下播放器不会触发字幕 API 请求
-- **登录状态会过期** — Cookie 失效后需重新扫码
+- **登录状态会过期** — Cookie 失效后需重新登录对应站点
+- **校内外登录状态独立** — 两个域名的 Cookie 不能互用
+- **校外功能需实机确认** — WebVPN 页面与接口只有本人登录后才能完成最终联调
 
 ## 权限说明
 
-插件仅在 `video.jw.scut.edu.cn` 页面运行，用于读取当前课程页面信息与字幕接口响应。
+插件仅获准访问 `video.jw.scut.edu.cn` 和 `video-jw-443.webvpn.scut.edu.cn`。正常情况下插件弹窗直接请求接口；如果 WebVPN 的 Cookie 或跨域策略阻止请求，插件会在验证当前课程标签页后于页面内重试一次，因此还声明了 `scripting` 权限。
 
 不会上传任何课程数据，也不会收集用户账号信息。

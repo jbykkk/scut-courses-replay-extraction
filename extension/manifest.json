@@ -1,10 +1,13 @@
 {
   "manifest_version": 3,
   "name": "SCUT 字幕下载",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "从华园视频课程回放中下载字幕（SRT/TXT/JSON）",
-  "permissions": ["activeTab", "downloads"],
-  "host_permissions": ["https://video.jw.scut.edu.cn/*"],
+  "permissions": ["activeTab", "downloads", "scripting"],
+  "host_permissions": [
+    "https://video.jw.scut.edu.cn/*",
+    "https://video-jw-443.webvpn.scut.edu.cn/*"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

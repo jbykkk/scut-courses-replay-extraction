@@ -124,7 +124,7 @@
 <body>
   <div id="error-page" class="error-page hidden">
     <p>请先打开课程播放页面</p>
-    <p style="font-size:12px; color:#999;">video.jw.scut.edu.cn/livingroom?...</p>
+    <p style="font-size:12px; color:#999;">支持校内站点与校外 WebVPN</p>
   </div>
 
   <div id="main" class="hidden">
@@ -142,6 +142,10 @@
     <div id="tab-single" class="tab-content active">
       <div class="content">
         <div class="info">
+          <div class="info-row">
+            <span class="info-label">站点</span>
+            <span class="info-value" id="site-name">-</span>
+          </div>
           <div class="info-row">
             <span class="info-label">课程</span>
             <span class="info-value" id="course-name">-</span>
@@ -189,6 +193,7 @@
   </div>
 
   <script src="jszip.min.js"></script>
+  <script src="core.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

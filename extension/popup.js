@@ -1,114 +1,130 @@
-const API_BASE = "https://video.jw.scut.edu.cn";
-const API = {
-  SUBTITLE: (subId) => `${API_BASE}/courseapi/v3/web-socket/search-trans-result?sub_id=${encodeURIComponent(subId)}&format=json`,
-  SUB_INFO: (courseId, subId) => `${API_BASE}/courseapi/v3/portal-home-setting/get-sub-info?course_id=${encodeURIComponent(courseId)}&sub_id=${encodeURIComponent(subId)}`,
-  COURSE_TITLE: (courseId) => `${API_BASE}/courseapi/v3/multi-search/get-course-teacher-others?course_id=${encodeURIComponent(courseId)}&per_page=1`,
-  CATALOGUE: (courseId) => `${API_BASE}/courseapi/v2/course/catalogue?course_id=${encodeURIComponent(courseId)}`,
-};
+const {
+  SUPPORTED_HOSTS,
+  parseCourseUrl,
+  createApi,
+  extractSubtitleItems,
+  toSrt,
+  toTxt,
+  sanitizeFilename,
+} = ScutSubtitleCore;
 
-// === URL parsing ===
+class RequestError extends Error {
+  constructor(message, { status = null, kind = "network" } = {}) {
+    super(message);
+    this.name = "RequestError";
+    this.status = status;
+    this.kind = kind;
+  }
+}
 
-function parseCourseUrl(url) {
+async function directJsonRequest(url) {
+  let response;
   try {
-    const u = new URL(url);
-    if (u.hostname !== "video.jw.scut.edu.cn") return null;
-    const subId = u.searchParams.get("sub_id");
-    if (!subId) return null;
-    return { subId, courseId: u.searchParams.get("course_id") };
+    response = await fetch(url, { credentials: "include" });
+  } catch (error) {
+    throw new RequestError(error.message || "网络请求失败", { kind: "network" });
+  }
+  if (!response.ok) {
+    const kind = response.status === 401 || response.status === 403 ? "auth" : "http";
+    throw new RequestError(`HTTP ${response.status}`, { status: response.status, kind });
+  }
+  console.info(`[SCUT] 接口响应：${url} status=${response.status}`);
+  const contentType = response.headers.get("content-type") || "";
+  try {
+    return JSON.parse(await response.text());
   } catch {
-    return null;
+    throw new RequestError(
+      `接口正文不是 JSON，可能需要重新登录（Content-Type: ${contentType || "未知"}）`,
+      { kind: "auth" }
+    );
   }
 }
 
-// === Filename sanitization ===
-
-function sanitizeFilename(name) {
-  const cleaned = name.replace(/[\/\\:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
-  return cleaned || "untitled";
-}
-
-// === API calls ===
-
-async function fetchSubtitle(subId) {
-  const resp = await fetch(API.SUBTITLE(subId), { credentials: "include" });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.json();
-}
-
-async function fetchCourseInfo(courseId, subId) {
-  const resp = await fetch(API.SUB_INFO(courseId, subId), { credentials: "include" });
-  if (!resp.ok) return null;
-  return (await resp.json())?.data || null;
-}
-
-async function fetchCourseTitle(courseId) {
-  const resp = await fetch(API.COURSE_TITLE(courseId), { credentials: "include" });
-  if (!resp.ok) return null;
-  return (await resp.json())?.data?.[0]?.course_title || null;
-}
-
-async function fetchCatalogue(courseId) {
-  const resp = await fetch(API.CATALOGUE(courseId), { credentials: "include" });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return (await resp.json())?.result?.data || [];
-}
-
-// === JSON parsing ===
-
-function extractSubtitleItems(body) {
-  if (Array.isArray(body)) {
-    if (body.length > 0 && typeof body[0] === "object" && "BeginSec" in body[0]) return body;
-    for (const item of body) {
-      if (item && typeof item === "object") {
-        const inner = extractSubtitleItems(item);
-        if (inner.length > 0) return inner;
-      }
-    }
-    return [];
+async function pageJsonRequest(tabId, expectedOrigin, url) {
+  const tab = await chrome.tabs.get(tabId);
+  const parsed = parseCourseUrl(tab.url || "");
+  if (!parsed || parsed.origin !== expectedOrigin) {
+    throw new RequestError("课程标签页已经切换，请回到原课程页面后重试", { kind: "page" });
   }
-  if (body && typeof body === "object") {
-    for (const key of ["all_content", "data", "result", "list", "rows"]) {
-      const value = body[key];
-      if (Array.isArray(value) && value.length > 0) {
-        const inner = extractSubtitleItems(value);
-        if (inner.length > 0) return inner;
-      }
-    }
+
+  let injection;
+  try {
+    injection = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: async (requestUrl, origin, supportedHosts) => {
+        try {
+          const current = new URL(location.href);
+          const target = new URL(requestUrl);
+          if (
+            location.origin !== origin ||
+            target.origin !== origin ||
+            !supportedHosts.includes(current.hostname)
+          ) {
+            return { ok: false, kind: "page", message: "页面来源校验失败" };
+          }
+          const response = await fetch(target.href, { credentials: "include" });
+          const contentType = response.headers.get("content-type") || "";
+          if (!response.ok) {
+            return {
+              ok: false,
+              kind: response.status === 401 || response.status === 403 ? "auth" : "http",
+              status: response.status,
+              message: `HTTP ${response.status}`,
+            };
+          }
+          const text = await response.text();
+          try {
+            return { ok: true, data: JSON.parse(text) };
+          } catch {
+            return {
+              ok: false,
+              kind: "auth",
+              message: `接口正文不是 JSON，可能需要重新登录（Content-Type: ${contentType || "未知"}）`,
+            };
+          }
+        } catch (error) {
+          return { ok: false, kind: "network", message: error.message || "页面内请求失败" };
+        }
+      },
+      args: [url, expectedOrigin, Array.from(SUPPORTED_HOSTS)],
+    });
+  } catch (error) {
+    throw new RequestError(`无法在课程页面内请求：${error.message}`, { kind: "permission" });
   }
-  return [];
+
+  const result = injection?.[0]?.result;
+  if (!result) throw new RequestError("课程页面没有返回请求结果", { kind: "page" });
+  if (!result.ok) {
+    throw new RequestError(result.message, { status: result.status, kind: result.kind });
+  }
+  return result.data;
 }
 
-// === Format conversion ===
-
-function formatTime(seconds) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds - Math.floor(seconds)) * 1000);
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+function shouldFallback(error) {
+  return error instanceof RequestError && ["network", "auth"].includes(error.kind);
 }
 
-function toSrt(items) {
-  let idx = 0;
-  return items
-    .filter((item) => item.Text?.trim())
-    .map((item) => {
-      idx++;
-      const start = formatTime(item.BeginSec);
-      const end = formatTime(item.EndSec || item.BeginSec + 5);
-      return `${idx}\n${start} --> ${end}\n${item.Text.trim()}`;
-    })
-    .join("\n\n");
+async function requestJson(url, pageContext) {
+  console.info(`[SCUT] 请求接口：${url}`);
+  try {
+    return await directJsonRequest(url);
+  } catch (error) {
+    if (!shouldFallback(error)) throw error;
+    console.info(`[SCUT] 弹窗请求失败（${error.message}），改用课程页面内请求`);
+    return pageJsonRequest(pageContext.tabId, pageContext.origin, url);
+  }
 }
 
-function toTxt(items) {
-  return items
-    .filter((item) => item.Text?.trim())
-    .map((item) => item.Text.trim())
-    .join("\n");
+function humanizeError(error) {
+  if (error?.kind === "auth" || error?.status === 401 || error?.status === 403) {
+    return "登录状态已失效，请重新登录 WebVPN/华园视频";
+  }
+  if (error?.kind === "permission") return "插件权限不足，请重新加载扩展后重试";
+  if (error?.status === 404) return "接口不存在或课程链接已失效（HTTP 404）";
+  if (error?.kind === "page") return error.message;
+  return error?.message || "网络或接口请求失败";
 }
-
-// === Download ===
 
 function downloadFile(content, filename) {
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
@@ -118,50 +134,55 @@ function downloadFile(content, filename) {
 
 async function downloadZip(files, zipName) {
   const zip = new JSZip();
-  for (const { name, content } of files) {
-    zip.file(name, content);
-  }
+  for (const { name, content } of files) zip.file(name, content);
   const blob = await zip.generateAsync({ type: "blob" });
   const url = URL.createObjectURL(blob);
   chrome.downloads.download({ url, filename: zipName, saveAs: false }, () => URL.revokeObjectURL(url));
 }
 
-// === UI helpers ===
-
 function showStatus(id, text, type) {
-  const el = document.getElementById(id);
-  el.textContent = text;
-  el.className = `status ${type}`;
+  const element = document.getElementById(id);
+  element.textContent = text;
+  element.className = `status ${type}`;
 }
-
-// === Main ===
 
 document.addEventListener("DOMContentLoaded", async () => {
   const mainEl = document.getElementById("main");
   const errorEl = document.getElementById("error-page");
-
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const parsed = parseCourseUrl(tab.url);
-
-  if (!parsed) {
+  const parsed = parseCourseUrl(tab?.url || "");
+  if (!parsed || tab.id === undefined) {
     errorEl.classList.remove("hidden");
     return;
   }
 
+  const api = createApi(parsed.origin);
+  const pageContext = { tabId: tab.id, origin: parsed.origin };
   const { subId, courseId } = parsed;
   mainEl.classList.remove("hidden");
+  document.getElementById("site-name").textContent =
+    parsed.siteKey === "external" ? "校外 WebVPN" : "校内站点";
 
   let courseTitle = null;
   let catalogue = [];
 
-  // === Load course info (single tab) ===
+  async function safeRequest(url) {
+    try {
+      return await requestJson(url, pageContext);
+    } catch (error) {
+      console.warn(`[SCUT] 可选信息获取失败：${url}`, error);
+      return null;
+    }
+  }
+
   if (courseId) {
-    const [info, title] = await Promise.all([
-      fetchCourseInfo(courseId, subId),
-      fetchCourseTitle(courseId),
+    const [infoBody, titleBody] = await Promise.all([
+      safeRequest(api.subInfo(courseId, subId)),
+      safeRequest(api.courseTitle(courseId)),
     ]);
-    courseTitle = title;
-    if (title) document.getElementById("course-name").textContent = title;
+    const info = infoBody?.data || null;
+    courseTitle = titleBody?.data?.[0]?.course_title || null;
+    if (courseTitle) document.getElementById("course-name").textContent = courseTitle;
     if (info) {
       document.getElementById("lecturer-name").textContent = info.lecturer_name || "-";
       document.getElementById("sub-title").textContent = info.sub_title || "-";
@@ -176,17 +197,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("course-subtitle").textContent = `sub_id: ${subId}`;
   }
 
-  // === Tab switching ===
-  document.querySelectorAll(".tab").forEach((tabBtn) => {
-    tabBtn.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-      document.querySelectorAll(".tab-content").forEach((t) => t.classList.remove("active"));
-      tabBtn.classList.add("active");
-      document.getElementById(`tab-${tabBtn.dataset.tab}`).classList.add("active");
+  document.querySelectorAll(".tab").forEach((tabButton) => {
+    tabButton.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach((item) => item.classList.remove("active"));
+      tabButton.classList.add("active");
+      document.getElementById(`tab-${tabButton.dataset.tab}`).classList.add("active");
     });
   });
 
-  // === Single lesson download ===
   document.getElementById("download-btn").addEventListener("click", async () => {
     const wantSrt = document.getElementById("fmt-srt").checked;
     const wantTxt = document.getElementById("fmt-txt").checked;
@@ -195,14 +214,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       showStatus("status-single", "请至少选择一种格式", "error");
       return;
     }
-
-    const btn = document.getElementById("download-btn");
-    btn.disabled = true;
+    const button = document.getElementById("download-btn");
+    button.disabled = true;
     showStatus("status-single", "正在获取字幕...", "loading");
-
     try {
-      const raw = await fetchSubtitle(subId);
-      const items = extractSubtitleItems(raw);
+      const items = extractSubtitleItems(await requestJson(api.subtitle(subId), pageContext));
       if (items.length === 0) {
         showStatus("status-single", "该课时暂无字幕数据", "error");
         return;
@@ -211,80 +227,69 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (wantTxt) downloadFile(toTxt(items), `subtitle_${subId}.txt`);
       if (wantJson) downloadFile(JSON.stringify(items, null, 2), `subtitle_${subId}.json`);
       showStatus("status-single", `已下载 ${items.length} 条字幕`, "success");
-    } catch (err) {
-      showStatus("status-single", err.message || "获取失败", "error");
+    } catch (error) {
+      showStatus("status-single", humanizeError(error), "error");
     } finally {
-      btn.disabled = false;
+      button.disabled = false;
     }
   });
 
-  // === Batch: load catalogue ===
   if (courseId) {
     try {
-      catalogue = await fetchCatalogue(courseId);
-    } catch {
-      catalogue = [];
+      const body = await requestJson(api.catalogue(courseId), pageContext);
+      catalogue = body?.result?.data || [];
+    } catch (error) {
+      console.warn("[SCUT] 课程目录获取失败", error);
+      showStatus("status-batch", `课程目录获取失败：${humanizeError(error)}`, "error");
     }
   }
 
   const listEl = document.getElementById("lesson-list");
   const countEl = document.getElementById("lesson-count");
-
   if (catalogue.length === 0) {
-    countEl.textContent = "未找到课程目录";
+    countEl.textContent = courseId ? "未找到课程目录" : "链接缺少 course_id";
   } else {
     countEl.textContent = `已选 ${catalogue.length} / ${catalogue.length} 节`;
-
     catalogue.forEach((lesson) => {
       const item = document.createElement("div");
       item.className = "lesson-item";
-
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.className = "lesson-check";
       checkbox.dataset.subId = lesson.sub_id;
       checkbox.checked = true;
-
       const label = document.createElement("span");
       label.className = "lesson-title";
       label.textContent = lesson.title || lesson.sub_id;
-
-      item.appendChild(checkbox);
-      item.appendChild(label);
+      item.append(checkbox, label);
       listEl.appendChild(item);
     });
-
     const selectAll = document.getElementById("select-all");
     selectAll.addEventListener("change", () => {
-      listEl.querySelectorAll(".lesson-check").forEach((c) => (c.checked = selectAll.checked));
+      listEl.querySelectorAll(".lesson-check").forEach((item) => { item.checked = selectAll.checked; });
       updateCount();
     });
-    listEl.addEventListener("change", (e) => {
-      if (e.target.classList.contains("lesson-check")) updateCount();
+    listEl.addEventListener("change", (event) => {
+      if (event.target.classList.contains("lesson-check")) updateCount();
     });
   }
 
   function getSelectedLessons() {
-    return Array.from(listEl.querySelectorAll(".lesson-check:checked")).map(
-      (c) => c.dataset.subId
-    );
+    return Array.from(listEl.querySelectorAll(".lesson-check:checked")).map((item) => item.dataset.subId);
   }
 
   function updateCount() {
-    const total = catalogue.length;
     const selected = getSelectedLessons().length;
-    countEl.textContent = `已选 ${selected} / ${total} 节`;
-    document.getElementById("select-all").checked = selected === total;
+    countEl.textContent = `已选 ${selected} / ${catalogue.length} 节`;
+    document.getElementById("select-all").checked = selected === catalogue.length;
   }
 
-  // === Batch download ===
   document.getElementById("batch-download-btn").addEventListener("click", async () => {
     const selectedSubIds = getSelectedLessons();
     if (selectedSubIds.length === 0) {
       showStatus("status-batch", "请至少选择一节课", "error");
       return;
     }
-
     const wantSrt = document.getElementById("batch-fmt-srt").checked;
     const wantTxt = document.getElementById("batch-fmt-txt").checked;
     const wantJson = document.getElementById("batch-fmt-json").checked;
@@ -293,57 +298,46 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    const btn = document.getElementById("batch-download-btn");
-    btn.disabled = true;
+    const button = document.getElementById("batch-download-btn");
     const progressBar = document.getElementById("batch-progress-bar");
     const progressFill = document.getElementById("batch-progress-fill");
+    button.disabled = true;
     progressBar.classList.remove("hidden");
-    showStatus("status-batch", `正在获取 0/${selectedSubIds.length}...`, "loading");
-
     const files = [];
     const failed = [];
     let successLessons = 0;
 
-    for (let i = 0; i < selectedSubIds.length; i++) {
-      const sid = selectedSubIds[i];
-      const lesson = catalogue.find((l) => l.sub_id === sid);
+    for (let index = 0; index < selectedSubIds.length; index++) {
+      const sid = selectedSubIds[index];
+      const lesson = catalogue.find((item) => String(item.sub_id) === String(sid));
       const label = sanitizeFilename(lesson?.title || sid);
-      const prefix = `${String(i + 1).padStart(2, "0")}_${label}_${sid}`;
-
+      const prefix = `${String(index + 1).padStart(2, "0")}_${label}_${sid}`;
       try {
-        const raw = await fetchSubtitle(sid);
-        const items = extractSubtitleItems(raw);
-        if (items.length > 0) {
-          if (wantSrt) files.push({ name: `${prefix}.srt`, content: toSrt(items) });
-          if (wantTxt) files.push({ name: `${prefix}.txt`, content: toTxt(items) });
-          if (wantJson) files.push({ name: `${prefix}.json`, content: JSON.stringify(items, null, 2) });
-          successLessons++;
-        } else {
-          failed.push(label);
-          console.warn(`[SCUT] 课时 "${label}" (${sid}) 无字幕数据`);
-        }
-      } catch (err) {
+        const items = extractSubtitleItems(await requestJson(api.subtitle(sid), pageContext));
+        if (items.length === 0) throw new RequestError("暂无字幕数据", { kind: "empty" });
+        if (wantSrt) files.push({ name: `${prefix}.srt`, content: toSrt(items) });
+        if (wantTxt) files.push({ name: `${prefix}.txt`, content: toTxt(items) });
+        if (wantJson) files.push({ name: `${prefix}.json`, content: JSON.stringify(items, null, 2) });
+        successLessons++;
+      } catch (error) {
         failed.push(label);
-        console.warn(`[SCUT] 课时 "${label}" (${sid}) 获取失败:`, err.message);
+        console.warn(`[SCUT] 课时 "${label}" (${sid}) 获取失败：`, error);
       }
-
-      const pct = Math.round(((i + 1) / selectedSubIds.length) * 100);
-      progressFill.style.width = `${pct}%`;
-      showStatus("status-batch", `正在获取 ${i + 1}/${selectedSubIds.length}...`, "loading");
+      progressFill.style.width = `${Math.round(((index + 1) / selectedSubIds.length) * 100)}%`;
+      showStatus("status-batch", `正在获取 ${index + 1}/${selectedSubIds.length}...`, "loading");
     }
 
     if (files.length > 0) {
-      const zipName = sanitizeFilename(`${courseTitle || "subtitles"}.zip`);
-      await downloadZip(files, zipName);
+      await downloadZip(files, sanitizeFilename(`${courseTitle || "subtitles"}.zip`));
       const summary = `${successLessons} 节成功，${failed.length} 节失败，${files.length} 个文件`;
-      const msg = failed.length > 0
-        ? `完成：${summary}（失败：${failed.slice(0, 3).join("、")}${failed.length > 3 ? "..." : ""}）`
-        : `完成：${summary}`;
-      showStatus("status-batch", msg, "success");
+      showStatus(
+        "status-batch",
+        failed.length ? `完成：${summary}（失败：${failed.slice(0, 3).join("、")}${failed.length > 3 ? "..." : ""}）` : `完成：${summary}`,
+        "success"
+      );
     } else {
-      showStatus("status-batch", "未能获取任何字幕数据", "error");
+      showStatus("status-batch", "未能获取任何字幕数据，请检查登录状态和课程字幕", "error");
     }
-
-    btn.disabled = false;
+    button.disabled = false;
   });
 });
