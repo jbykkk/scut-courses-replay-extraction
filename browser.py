@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
@@ -10,14 +10,44 @@ from auth import get_auth_path, save_auth
 from config import (
     CATALOGUE_API_PATH,
     LOGIN_TIMEOUT,
+    SUBTITLE_API_PATH,
     SUBTITLE_TIMEOUT,
-    SUBTITLE_URL_PATTERN,
     SiteConfig,
-    get_site,
+    validate_numeric_id,
 )
 from subtitle import extract_subtitle_items
 
 logger = logging.getLogger(__name__)
+
+
+def _login_hint(site: SiteConfig) -> str:
+    return (
+        "登录状态已失效，请执行："
+        f"uv run python main.py login --site {site.key}"
+    )
+
+
+def is_matching_subtitle_response(
+    response_url: str, site: SiteConfig, expected_sub_id: str
+) -> bool:
+    """Accept only the exact subtitle endpoint for the current lesson."""
+    try:
+        parsed = urlparse(response_url)
+        port = parsed.port
+        expected_id = validate_numeric_id(expected_sub_id, "sub_id")
+    except (ValueError, TypeError):
+        return False
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or (parsed.hostname or "").lower() != site.hostname
+        or port not in (None, 443)
+        or parsed.path != SUBTITLE_API_PATH
+    ):
+        return False
+    sub_ids = parse_qs(parsed.query, keep_blank_values=True).get("sub_id", [])
+    return sub_ids == [expected_id]
 
 
 async def create_browser(
@@ -82,8 +112,7 @@ async def intercept_subtitle(
 
     async def handle_response(response) -> None:
         nonlocal subtitle_data, failure_reason
-        response_host = (urlparse(response.url).hostname or "").lower()
-        if SUBTITLE_URL_PATTERN not in response.url or response_host != site.hostname:
+        if not is_matching_subtitle_response(response.url, site, sub_id):
             return
 
         content_type = response.headers.get("content-type", "")
@@ -94,7 +123,7 @@ async def intercept_subtitle(
             content_type,
         )
         if response.status in (401, 403):
-            failure_reason = "登录状态已失效，请重新登录对应站点。"
+            failure_reason = _login_hint(site)
             return
         if response.status != 200:
             failure_reason = f"字幕接口返回 HTTP {response.status}。"
@@ -112,6 +141,7 @@ async def intercept_subtitle(
             failure_reason = (
                 "字幕接口正文不是 JSON，可能已跳转到登录页。"
                 f"（Content-Type: {content_type or '未知'}）"
+                f" {_login_hint(site)}"
             )
 
     page.on("response", handle_response)
@@ -120,7 +150,7 @@ async def intercept_subtitle(
         await page.goto(play_url, wait_until="networkidle")
         logger.info("课程页最终地址：%s", page.url)
         if (urlparse(page.url).hostname or "").lower() != site.hostname:
-            raise RuntimeError("页面已跳转到登录站点，请重新登录对应站点。")
+            raise RuntimeError(f"页面已跳转到登录站点。{_login_hint(site)}")
 
         elapsed = 0
         while subtitle_data is None and failure_reason is None and elapsed < timeout / 1000:
@@ -188,11 +218,12 @@ async def get_course_list(context: BrowserContext, site: SiteConfig) -> list[dic
 async def get_course_catalogue(
     context: BrowserContext, site: SiteConfig, course_id: str
 ) -> list[dict]:
+    safe_course_id = validate_numeric_id(course_id, "course_id")
     page = await context.new_page()
     try:
         await page.goto(site.origin, wait_until="networkidle")
         if (urlparse(page.url).hostname or "").lower() != site.hostname:
-            raise RuntimeError("页面已跳转到登录站点，请重新登录对应站点。")
+            raise RuntimeError(f"页面已跳转到登录站点。{_login_hint(site)}")
         result = await page.evaluate(
             """async ({path, courseId}) => {
                 const url = new URL(path, location.origin);
@@ -205,7 +236,7 @@ async def get_course_catalogue(
                 }
                 return {url: url.href, status: resp.status, body: await resp.json()};
             }""",
-            {"path": CATALOGUE_API_PATH, "courseId": course_id},
+            {"path": CATALOGUE_API_PATH, "courseId": safe_course_id},
         )
         logger.info("课程目录接口：%s status=%s", result["url"], result["status"])
         return result["body"].get("result", {}).get("data", [])

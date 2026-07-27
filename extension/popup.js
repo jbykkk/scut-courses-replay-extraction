@@ -6,6 +6,7 @@ const {
   toSrt,
   toTxt,
   sanitizeFilename,
+  sanitizeIdForFilename,
 } = ScutSubtitleCore;
 
 class RequestError extends Error {
@@ -126,18 +127,40 @@ function humanizeError(error) {
   return error?.message || "网络或接口请求失败";
 }
 
-function downloadFile(content, filename) {
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+function startDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
-  chrome.downloads.download({ url, filename, saveAs: false }, () => URL.revokeObjectURL(url));
+  return new Promise((resolve, reject) => {
+    chrome.downloads.download({ url, filename, saveAs: false }, (downloadId) => {
+      const error = chrome.runtime.lastError;
+      URL.revokeObjectURL(url);
+      if (error || downloadId === undefined) {
+        reject(
+          new RequestError(
+            `浏览器未能创建下载任务：${error?.message || "未知错误"}`,
+            { kind: "permission" }
+          )
+        );
+        return;
+      }
+      resolve(downloadId);
+    });
+  });
+}
+
+function downloadFile(content, filename) {
+  const type = filename.endsWith(".json")
+    ? "application/json;charset=utf-8"
+    : filename.endsWith(".srt")
+      ? "application/x-subrip;charset=utf-8"
+      : "text/plain;charset=utf-8";
+  return startDownload(new Blob([content], { type }), filename);
 }
 
 async function downloadZip(files, zipName) {
   const zip = new JSZip();
   for (const { name, content } of files) zip.file(name, content);
   const blob = await zip.generateAsync({ type: "blob" });
-  const url = URL.createObjectURL(blob);
-  chrome.downloads.download({ url, filename: zipName, saveAs: false }, () => URL.revokeObjectURL(url));
+  return startDownload(blob, zipName);
 }
 
 function showStatus(id, text, type) {
@@ -223,9 +246,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         showStatus("status-single", "该课时暂无字幕数据", "error");
         return;
       }
-      if (wantSrt) downloadFile(toSrt(items), `subtitle_${subId}.srt`);
-      if (wantTxt) downloadFile(toTxt(items), `subtitle_${subId}.txt`);
-      if (wantJson) downloadFile(JSON.stringify(items, null, 2), `subtitle_${subId}.json`);
+      const downloads = [];
+      if (wantSrt) downloads.push(downloadFile(toSrt(items), `subtitle_${subId}.srt`));
+      if (wantTxt) downloads.push(downloadFile(toTxt(items), `subtitle_${subId}.txt`));
+      if (wantJson) {
+        downloads.push(
+          downloadFile(JSON.stringify(items, null, 2), `subtitle_${subId}.json`)
+        );
+      }
+      await Promise.all(downloads);
       showStatus("status-single", `已下载 ${items.length} 条字幕`, "success");
     } catch (error) {
       showStatus("status-single", humanizeError(error), "error");
@@ -237,7 +266,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (courseId) {
     try {
       const body = await requestJson(api.catalogue(courseId), pageContext);
-      catalogue = body?.result?.data || [];
+      catalogue = (body?.result?.data || []).filter((lesson) => {
+        try {
+          lesson.sub_id = ScutSubtitleCore.normalizeNumericId(lesson.sub_id, "sub_id");
+          return true;
+        } catch {
+          console.warn("[SCUT] 跳过包含非法 sub_id 的课程目录项", lesson);
+          return false;
+        }
+      });
     } catch (error) {
       console.warn("[SCUT] 课程目录获取失败", error);
       showStatus("status-batch", `课程目录获取失败：${humanizeError(error)}`, "error");
@@ -311,7 +348,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       const sid = selectedSubIds[index];
       const lesson = catalogue.find((item) => String(item.sub_id) === String(sid));
       const label = sanitizeFilename(lesson?.title || sid);
-      const prefix = `${String(index + 1).padStart(2, "0")}_${label}_${sid}`;
+      const safeSid = sanitizeIdForFilename(sid, "sub_id");
+      const prefix = `${String(index + 1).padStart(2, "0")}_${label}_${safeSid}`;
       try {
         const items = extractSubtitleItems(await requestJson(api.subtitle(sid), pageContext));
         if (items.length === 0) throw new RequestError("暂无字幕数据", { kind: "empty" });

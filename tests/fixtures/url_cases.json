@@ -1,0 +1,144 @@
+[
+  {
+    "name": "internal full URL",
+    "url": "https://video.jw.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21",
+    "valid": true,
+    "site_key": "internal",
+    "course_id": "64762",
+    "sub_id": "554146",
+    "tenant_code": "21"
+  },
+  {
+    "name": "external reordered URL",
+    "url": "https://video-jw-443.webvpn.scut.edu.cn/livingroom/?sub_id=2&tenant_code=99&course_id=1",
+    "valid": true,
+    "site_key": "external",
+    "course_id": "1",
+    "sub_id": "2",
+    "tenant_code": "99"
+  },
+  {
+    "name": "explicit standard port and optional course ID",
+    "url": "https://video.jw.scut.edu.cn:443/livingroom?sub_id=2",
+    "valid": true,
+    "site_key": "internal",
+    "course_id": null,
+    "sub_id": "2",
+    "tenant_code": "21"
+  },
+  {
+    "name": "HTTP",
+    "url": "http://video.jw.scut.edu.cn/livingroom?sub_id=2",
+    "valid": false
+  },
+  {
+    "name": "unknown host",
+    "url": "https://example.com/livingroom?sub_id=2",
+    "valid": false
+  },
+  {
+    "name": "lookalike host",
+    "url": "https://video.jw.scut.edu.cn.example.com/livingroom?sub_id=2",
+    "valid": false
+  },
+  {
+    "name": "wrong path",
+    "url": "https://video.jw.scut.edu.cn/other?sub_id=2",
+    "valid": false
+  },
+  {
+    "name": "too many trailing slashes",
+    "url": "https://video.jw.scut.edu.cn/livingroom//?sub_id=2",
+    "valid": false
+  },
+  {
+    "name": "nonstandard port",
+    "url": "https://video.jw.scut.edu.cn:444/livingroom?sub_id=2",
+    "valid": false
+  },
+  {
+    "name": "username",
+    "url": "https://user@video.jw.scut.edu.cn/livingroom?sub_id=2",
+    "valid": false
+  },
+  {
+    "name": "username and password",
+    "url": "https://user:password@video.jw.scut.edu.cn/livingroom?sub_id=2",
+    "valid": false
+  },
+  {
+    "name": "missing sub ID",
+    "url": "https://video.jw.scut.edu.cn/livingroom?course_id=1",
+    "valid": false
+  },
+  {
+    "name": "blank sub ID",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=",
+    "valid": false
+  },
+  {
+    "name": "whitespace sub ID",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=%20",
+    "valid": false
+  },
+  {
+    "name": "duplicate sub ID",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=2&sub_id=3",
+    "valid": false
+  },
+  {
+    "name": "duplicate course ID",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=2&course_id=1&course_id=1",
+    "valid": false
+  },
+  {
+    "name": "duplicate tenant code",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=2&tenant_code=21&tenant_code=21",
+    "valid": false
+  },
+  {
+    "name": "plain traversal",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=../../escaped",
+    "valid": false
+  },
+  {
+    "name": "encoded traversal",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=..%2F..%2Fescaped",
+    "valid": false
+  },
+  {
+    "name": "backslash traversal",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=..%5C..%5Cescaped",
+    "valid": false
+  },
+  {
+    "name": "absolute POSIX path",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=%2Ftmp%2Fescaped",
+    "valid": false
+  },
+  {
+    "name": "absolute Windows path",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=C%3A%5Ctemp%5Cescaped",
+    "valid": false
+  },
+  {
+    "name": "colon",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=2%3A3",
+    "valid": false
+  },
+  {
+    "name": "control character",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=2%00",
+    "valid": false
+  },
+  {
+    "name": "alphabetic course ID",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=2&course_id=course",
+    "valid": false
+  },
+  {
+    "name": "blank tenant code",
+    "url": "https://video.jw.scut.edu.cn/livingroom?sub_id=2&tenant_code=",
+    "valid": false
+  }
+]

@@ -18,6 +18,7 @@ from config import (
     build_livingroom_url,
     get_site,
     parse_course_url,
+    validate_numeric_id,
 )
 from subtitle import save_subtitle
 
@@ -35,11 +36,15 @@ def _parse_or_report(url: str) -> CourseUrl | None:
         return None
 
 
-async def cmd_login(args) -> None:
+async def cmd_login(args) -> bool:
     site = get_site(args.site)
     pw, browser, context = await create_browser(site.key, headless=False)
     try:
         await do_login(context, site)
+        return True
+    except Exception:
+        logging.getLogger(__name__).debug("登录失败", exc_info=True)
+        return False
     finally:
         await close_browser(pw, browser, context)
 
@@ -129,8 +134,10 @@ async def cmd_get(args) -> None:
             return
         print(f"共 {len(catalogue)} 节课\n")
         for lesson in catalogue:
-            sub_id = str(lesson.get("sub_id", "")).strip()
-            if not sub_id:
+            try:
+                sub_id = validate_numeric_id(lesson.get("sub_id"), "sub_id")
+            except ValueError:
+                logging.warning("跳过包含非法 sub_id 的课程目录项：%r", lesson)
                 continue
             play_url = build_livingroom_url(
                 source.origin,
@@ -161,6 +168,22 @@ async def cmd_get(args) -> None:
 
 
 def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    logging.basicConfig(
+        level=logging.INFO if args.verbose else logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+    if args.command == "login":
+        if not asyncio.run(cmd_login(args)):
+            raise SystemExit(1)
+    elif args.command == "get":
+        asyncio.run(cmd_get(args))
+    else:
+        parser.print_help()
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="华园视频校内/校外字幕提取工具")
     parser.add_argument("--verbose", action="store_true", help="显示接口诊断日志")
     subparsers = parser.add_subparsers(dest="command")
@@ -169,8 +192,8 @@ def main() -> None:
     login_parser.add_argument(
         "--site",
         choices=tuple(SITES),
-        default="external",
-        help="登录站点：internal=校内，external=WebVPN（默认）",
+        default="internal",
+        help="登录站点：internal=校内（默认），external=WebVPN",
     )
 
     get_parser = subparsers.add_parser("get", help="获取课程字幕")
@@ -178,17 +201,7 @@ def main() -> None:
     get_parser.add_argument("--all", action="store_true", help="批量导出整门课程字幕")
     get_parser.add_argument("--headless", action="store_true", help="不显示浏览器窗口")
 
-    args = parser.parse_args()
-    logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(levelname)s %(name)s: %(message)s",
-    )
-    if args.command == "login":
-        asyncio.run(cmd_login(args))
-    elif args.command == "get":
-        asyncio.run(cmd_get(args))
-    else:
-        parser.print_help()
+    return parser
 
 
 if __name__ == "__main__":

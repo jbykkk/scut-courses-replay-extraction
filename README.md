@@ -103,11 +103,11 @@ uv run playwright install chromium
 ### 使用
 
 ```bash
-# 1. 登录校外 WebVPN（默认，可省略 --site external）
-uv run python main.py login --site external
+# 1. 登录校内站点（默认，兼容旧版本行为）
+uv run python main.py login
 
-# 如果在校内网络使用，则单独登录校内站点
-uv run python main.py login --site internal
+# 校外使用时显式登录 WebVPN
+uv run python main.py login --site external
 
 # 2. 获取单节课字幕（粘贴课程链接）
 uv run python main.py get "https://video.jw.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
@@ -131,10 +131,28 @@ CLI 会分别保存登录状态：
 | 校内 | `data/auth_state_internal.json` |
 | 校外 WebVPN | `data/auth_state_external.json` |
 
+旧版本的校内登录状态 `data/auth_state.json` 仍可读取，因此旧用户不必立即重新登录；下一次执行校内登录后会保存到新的 `auth_state_internal.json`。WebVPN 使用不同域名和 Cookie，首次使用校外入口仍需执行 `login --site external`。
+
 这些文件包含会话 Cookie，不能发给他人，也不要提交到 Git。需要查看最终课程页、字幕接口和课程目录接口地址时，在命令最前面加 `--verbose`：
 
 ```bash
 uv run python main.py --verbose get "课程链接"
+```
+
+### 扩展实机回退验收
+
+仓库提供一个可复现的扩展实机验收脚本。它会加载 `extension/`，强制阻断弹窗的第一次字幕请求，只有课程页面内回退成功且 SRT/TXT/JSON 三种下载内容均有效时才通过：
+
+```bash
+uv run python scripts/live_extension_check.py "课程播放链接"
+```
+
+脚本使用对应站点现有的 CLI 登录状态；测试下载保存在一次性临时目录，不会输出 Cookie。截图和已完成的 WebVPN 验收结果见 [`evidence/README.md`](./evidence/README.md)。
+
+如需同时验证整课 ZIP、ZIP entry 数量和路径安全，加上 `--batch`：
+
+```bash
+uv run python scripts/live_extension_check.py --batch "课程播放链接"
 ```
 
 ### 输出
@@ -162,6 +180,15 @@ uv run python main.py --verbose get "课程链接"
 感谢大家冒雨前来上课。
 那今天是咱们最后一次课，啊然后因为今天咱们也是两节
 ```
+
+### 字幕转换与路径安全规则
+
+- `sub_id`、`course_id`、`tenant_code` 只接受十进制数字。
+- SRT 只保留文本非空、开始时间为有限非负数的条目。
+- 缺少 `BeginSec` 的条目不进入 SRT；缺少或为 `null` 的 `EndSec` 使用开始时间加 5 秒。
+- NaN、无穷值、负开始时间以及早于开始时间的结束时间会从 SRT 丢弃，序号始终连续。
+- TXT 不依赖时间字段，只要 `Text` 是非空字符串就会保留。
+- 写文件前会再次清理文件名，并确认解析后的路径仍位于 `output/json`、`output/srt`、`output/txt` 内。
 
 ---
 
