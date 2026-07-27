@@ -14,3 +14,6 @@ data/
 
 # Output subtitles
 output/
+
+# Local review notes
+docs/

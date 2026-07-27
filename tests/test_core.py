@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import subtitle
 from config import CourseUrlError, build_livingroom_url, parse_course_url
 from subtitle import (
     extract_subtitle_items,
@@ -41,7 +42,7 @@ class CourseUrlTests(unittest.TestCase):
 
     def test_invalid_urls_are_rejected(self):
         invalid = (
-            f"http://video.jw.scut.edu.cn/livingroom?sub_id=2",
+            "http://video.jw.scut.edu.cn/livingroom?sub_id=2",
             "https://example.com/livingroom?sub_id=2",
             "https://video.jw.scut.edu.cn.example.com/livingroom?sub_id=2",
             f"{INTERNAL}/other?sub_id=2",
@@ -91,27 +92,55 @@ class SubtitleTests(unittest.TestCase):
             "A\nB",
         )
 
-    def test_default_filename_does_not_repeat_sub_id(self):
-        import subtitle
+    def test_save_creates_three_readable_files(self):
+        old_output = subtitle.OUTPUT_DIR
+        items = [{"BeginSec": 0, "EndSec": 1, "Text": "测试字幕"}]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "output"
+            subtitle.OUTPUT_DIR = output_dir
+            try:
+                json_path, srt_path, txt_path = save_subtitle(items, "554146")
 
+                self.assertEqual(
+                    json.loads(json_path.read_text(encoding="utf-8")), items
+                )
+                self.assertIn("测试字幕", srt_path.read_text(encoding="utf-8"))
+                self.assertEqual(txt_path.read_text(encoding="utf-8"), "测试字幕")
+                self.assertTrue(
+                    json_path.resolve().is_relative_to((output_dir / "json").resolve())
+                )
+                self.assertTrue(
+                    srt_path.resolve().is_relative_to((output_dir / "srt").resolve())
+                )
+                self.assertTrue(
+                    txt_path.resolve().is_relative_to((output_dir / "txt").resolve())
+                )
+            finally:
+                subtitle.OUTPUT_DIR = old_output
+
+    def test_default_filename_does_not_repeat_sub_id(self):
         old_output = subtitle.OUTPUT_DIR
         with tempfile.TemporaryDirectory() as temp_dir:
             subtitle.OUTPUT_DIR = Path(temp_dir)
             try:
                 paths = save_subtitle([{"BeginSec": 0, "Text": "A"}], "554146")
+                self.assertEqual(paths[0].name, "554146.json")
             finally:
                 subtitle.OUTPUT_DIR = old_output
-        self.assertEqual(paths[0].name, "554146.json")
 
 
 class ManifestTests(unittest.TestCase):
-    def test_extension_permissions(self):
+    def test_extension_permissions_are_scoped(self):
         manifest_path = Path(__file__).parents[1] / "extension" / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["manifest_version"], 3)
         self.assertEqual(manifest["version"], "0.2.0")
+        self.assertNotIn("<all_urls>", manifest.get("host_permissions", []))
         self.assertIn("scripting", manifest["permissions"])
-        self.assertIn(f"{INTERNAL}/*", manifest["host_permissions"])
-        self.assertIn(f"{EXTERNAL}/*", manifest["host_permissions"])
+        self.assertEqual(
+            manifest["host_permissions"],
+            [f"{INTERNAL}/*", f"{EXTERNAL}/*"],
+        )
 
 
 if __name__ == "__main__":
