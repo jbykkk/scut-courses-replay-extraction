@@ -2,7 +2,7 @@
 
 ![](./assets/figures/icon.png)
 
-从华南理工大学“百步梯学堂”中提供的课程回放平台“华园视频”提取**课程回放字幕**，支持 JSON、SRT、纯文本三种格式，可批量导出同一课程字幕并打包为 ZIP。
+从华南理工大学“百步梯学堂”中提供的课程回放平台“华园视频”提取**课程回放字幕**，支持 JSON、SRT、纯文本三种格式，可批量导出同一课程字幕并打包为ZIP。
 
 本项目会根据课程链接自动选择正确入口：
 
@@ -74,10 +74,8 @@ Microsoft Edge 插件安装同理。
 **弹窗显示"请先打开课程播放页面"**
 当前标签页不是华园视频的课程播放页，请先打开一个课程页面。
 
-如果刚更新过插件，请进入 `chrome://extensions/`，找到本插件并点击“重新加载”，再刷新课程页面。
-
 **下载失败或显示 HTTP 错误**
-登录状态可能已过期，请在当前使用的入口重新登录后重试。校外入口应重新登录 WebVPN，不能只登录校内站点。401、403 或“接口未返回 JSON”通常表示登录失效；404 通常表示课程链接或接口路径发生变化。
+登录状态可能已过期，请在当前使用的华园视频入口重新登录后重试。校外入口需要重新登录 WebVPN。
 
 **部分课时没有字幕**
 新录制的课程可能尚未生成字幕，或该课时没有语音内容。失败的课时会显示在下载结果中，同时输出到浏览器控制台。
@@ -103,14 +101,17 @@ uv run playwright install chromium
 ### 使用
 
 ```bash
-# 1. 登录校内站点（默认，兼容旧版本行为）
+# 1. 登录校内站点（默认）
 uv run python main.py login
 
-# 校外使用时显式登录 WebVPN
+# 校外使用时登录 WebVPN
 uv run python main.py login --site external
 
 # 2. 获取单节课字幕（粘贴课程链接）
 uv run python main.py get "https://video.jw.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
+
+# 校外链接会被自动识别
+uv run python main.py get "https://video-jw-443.webvpn.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
 
 # 交互式输入（不带参数）
 uv run python main.py get
@@ -120,39 +121,8 @@ uv run python main.py get
 # 3. 批量导出整门课程
 uv run python main.py get --all "https://video.jw.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
 
-# 校外链接会被自动识别，不需要额外的站点参数
-uv run python main.py get "https://video-jw-443.webvpn.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
-```
-
-CLI 会分别保存登录状态：
-
-| 站点 | 登录状态文件 |
-|------|------|
-| 校内 | `data/auth_state_internal.json` |
-| 校外 WebVPN | `data/auth_state_external.json` |
-
-旧版本的校内登录状态 `data/auth_state.json` 仍可读取，因此旧用户不必立即重新登录；下一次执行校内登录后会保存到新的 `auth_state_internal.json`。WebVPN 使用不同域名和 Cookie，首次使用校外入口仍需执行 `login --site external`。
-
-这些文件包含会话 Cookie，不能发给他人，也不要提交到 Git。需要查看最终课程页、字幕接口和课程目录接口地址时，在命令最前面加 `--verbose`：
-
-```bash
-uv run python main.py --verbose get "课程链接"
-```
-
-### 扩展实机回退验收
-
-仓库提供一个可复现的扩展实机验收脚本。它会加载 `extension/`，强制阻断弹窗的第一次字幕请求，只有课程页面内回退成功且 SRT/TXT/JSON 三种下载内容均有效时才通过：
-
-```bash
-uv run python scripts/live_extension_check.py "课程播放链接"
-```
-
-脚本使用对应站点现有的 CLI 登录状态；测试下载保存在一次性临时目录，不会输出 Cookie。截图和已完成的 WebVPN 验收结果见 [`evidence/README.md`](./evidence/README.md)。
-
-如需同时验证整课 ZIP、ZIP entry 数量和路径安全，加上 `--batch`：
-
-```bash
-uv run python scripts/live_extension_check.py --batch "课程播放链接"
+# 校外整门课程同样会自动选择 WebVPN 入口
+uv run python main.py get --all "https://video-jw-443.webvpn.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
 ```
 
 ### 输出
@@ -181,15 +151,6 @@ uv run python scripts/live_extension_check.py --batch "课程播放链接"
 那今天是咱们最后一次课，啊然后因为今天咱们也是两节
 ```
 
-### 字幕转换与路径安全规则
-
-- `sub_id`、`course_id`、`tenant_code` 只接受十进制数字。
-- SRT 只保留文本非空、开始时间为有限非负数的条目。
-- 缺少 `BeginSec` 的条目不进入 SRT；缺少或为 `null` 的 `EndSec` 使用开始时间加 5 秒。
-- NaN、无穷值、负开始时间以及早于开始时间的结束时间会从 SRT 丢弃，序号始终连续。
-- TXT 不依赖时间字段，只要 `Text` 是非空字符串就会保留。
-- 写文件前会再次清理文件名，并确认解析后的路径仍位于 `output/json`、`output/srt`、`output/txt` 内。
-
 ---
 
 ## 项目结构
@@ -198,13 +159,12 @@ uv run python scripts/live_extension_check.py --batch "课程播放链接"
 ├── main.py              # CLI 入口
 ├── browser.py           # Playwright 浏览器管理与网络拦截
 ├── subtitle.py          # JSON → SRT/TXT 格式转换
-├── config.py            # 校内外站点、课程 URL 解析与配置常量
+├── config.py            # URL 与配置常量
 ├── auth.py              # 登录状态管理
 ├── extension/           # Chrome 插件
 │   ├── manifest.json
 │   ├── popup.html
-│   ├── core.js          # 可测试的 URL/API/字幕纯函数
-│   ├── popup.js         # 请求、页面内回退与交互逻辑
+│   ├── popup.js
 │   └── jszip.min.js
 ├── output/              # 字幕输出（CLI）
 │   ├── json/
@@ -218,12 +178,10 @@ uv run python scripts/live_extension_check.py --batch "课程播放链接"
 ## 已知限制
 
 - **CLI 需要有头浏览器** — headless 模式下播放器不会触发字幕 API 请求
-- **登录状态会过期** — Cookie 失效后需重新登录对应站点
-- **校内外登录状态独立** — 两个域名的 Cookie 不能互用
-- **校外功能需实机确认** — WebVPN 页面与接口只有本人登录后才能完成最终联调
+- **登录状态会过期** — Cookie 失效后需重新扫码登录对应站点
 
 ## 权限说明
 
-插件仅获准访问 `video.jw.scut.edu.cn` 和 `video-jw-443.webvpn.scut.edu.cn`。正常情况下插件弹窗直接请求接口；如果 WebVPN 的 Cookie 或跨域策略阻止请求，插件会在验证当前课程标签页后于页面内重试一次，因此还声明了 `scripting` 权限。
+插件仅在 `video.jw.scut.edu.cn` 和 `video-jw-443.webvpn.scut.edu.cn` 页面运行，用于读取当前课程页面信息与字幕接口响应。
 
 不会上传任何课程数据，也不会收集用户账号信息。
