@@ -13,6 +13,7 @@ from playwright.sync_api import sync_playwright, expect
 
 EXTENSION = Path(__file__).resolve().parents[1] / "extension"
 ORIGIN = "https://video.jw.scut.edu.cn"
+EXTERNAL_ORIGIN = "https://video-jw-443.webvpn.scut.edu.cn"
 ITEMS = [{"BeginSec": 1, "EndSec": 3, "Text": "测试字幕"}]
 NO_SUBTITLE = {"code": 10002, "msg": "未查询到语音数据", "total": 0, "list": []}
 
@@ -44,10 +45,30 @@ class PopupTests(unittest.TestCase):
         self.transient_failure = set()
         self.catalogue_body = None
         self.metadata_error = False
+        self.origin = ORIGIN
         self.page.add_init_script("""(() => {
             window.downloads = [];
+            window.pageRequests = [];
+            window.courseTab = {id: 7, url: `${location.origin}/livingroom?course_id=42&sub_id=1`};
+            const nativeFetch = window.fetch.bind(window);
+            window.fetch = (url, options) => {
+                if (window.blockDirectRequests && !window.inPageRequest && String(url).includes('/courseapi/')) {
+                    return Promise.reject(new TypeError('Failed to fetch'));
+                }
+                return nativeFetch(url, options);
+            };
             window.chrome = {
-                tabs: { query: async () => [{url: 'https://video.jw.scut.edu.cn/livingroom?course_id=42&sub_id=1'}] },
+                tabs: {query: async () => [window.courseTab], get: async () => window.courseTab},
+                scripting: {executeScript: async ({target, func, args}) => {
+                    if (target.tabId !== window.courseTab.id) throw new Error('Invalid tab');
+                    window.pageRequests.push(args[0]);
+                    window.inPageRequest = true;
+                    try {
+                        return [{result: await func(...args)}];
+                    } finally {
+                        window.inPageRequest = false;
+                    }
+                }},
                 runtime: {},
                 downloads: {download: async (options, callback) => {
                     if (window.downloadError) {
@@ -65,7 +86,8 @@ class PopupTests(unittest.TestCase):
                 }}
             };
         })()""")
-        self.page.route("https://video.jw.scut.edu.cn/**", self.route)
+        for origin in (ORIGIN, EXTERNAL_ORIGIN):
+            self.page.route(f"{origin}/**", self.route)
 
     def tearDown(self):
         self.context.close()
@@ -96,7 +118,7 @@ class PopupTests(unittest.TestCase):
             route.fulfill(path=file)
 
     def open_batch(self):
-        self.page.goto(f"{ORIGIN}/popup.html")
+        self.page.goto(f"{self.origin}/popup.html")
         expect(self.page.locator("#lesson-count")).not_to_have_text("加载中...")
         self.page.locator('[data-tab="batch"]').click()
 
@@ -114,9 +136,9 @@ class PopupTests(unittest.TestCase):
         # Same distribution as the reported course: 4 with subtitles, 3 without,
         # 1 live, 2 without replay, 13 future. Numeric IDs also exercise normalization.
         self.rows = [lesson(i) for i in range(1, 8)]
-        self.rows += [lesson("live", "1"), lesson("no-replay", "5"), lesson("processing", "3")]
-        self.rows += [lesson(f"future-{i}", "2", "4102444800") for i in range(13)]
-        self.rows += [lesson("future-replay", "6", "4102444800000"), lesson(1)]
+        self.rows += [lesson("101", "1"), lesson("102", "5"), lesson("103", "3")]
+        self.rows += [lesson(str(200 + i), "2", "4102444800") for i in range(13)]
+        self.rows += [lesson("300", "6", "4102444800000"), lesson(1), lesson("../../escaped")]
         self.subtitles = {str(i): NO_SUBTITLE for i in range(5, 8)}
         self.open_batch()
         expect(self.page.locator(".lesson-check")).to_have_count(7)
@@ -161,7 +183,7 @@ class PopupTests(unittest.TestCase):
         self.open_batch()
         self.page.evaluate("window.downloadError = true")
         self.export()
-        expect(self.page.locator("#status-batch")).to_have_text("导出失败：下载被阻止")
+        expect(self.page.locator("#status-batch")).to_have_text("导出失败：浏览器未能创建下载任务：下载被阻止")
         expect(self.page.locator("#select-all")).to_be_enabled()
         expect(self.page.locator("#report-download-btn")).to_be_visible()
         self.page.evaluate("window.downloadError = false")
@@ -191,11 +213,40 @@ class PopupTests(unittest.TestCase):
         expect(self.page.locator("#catalogue-note")).to_have_text("已识别 2 节课")
 
     def test_no_past_replays_disables_selection(self):
-        self.rows = [lesson("future", "2", "4102444800"), lesson("no-replay", "5")]
+        self.rows = [lesson("101", "2", "4102444800"), lesson("102", "5")]
         self.open_batch()
         expect(self.page.locator("#lesson-count")).to_have_text("当前没有可导出的回放")
         expect(self.page.locator("#batch-download-btn")).to_be_disabled()
         expect(self.page.locator("#select-all")).to_be_disabled()
+
+    def test_webvpn_fallback_keeps_filtering_and_subtitle_report(self):
+        self.origin = EXTERNAL_ORIGIN
+        self.rows = [lesson("1"), lesson("2"), lesson("3", "2", "4102444800")]
+        self.subtitles = {"2": NO_SUBTITLE}
+        self.page.add_init_script("window.blockDirectRequests = true")
+        self.open_batch()
+        expect(self.page.locator("#site-name")).to_have_text("校外 WebVPN")
+        expect(self.page.locator(".lesson-check")).to_have_count(2)
+        self.export()
+        self.assertEqual(self.requests, ["1", "2"])
+        expect(self.page.locator("#catalogue-note")).to_have_text("已识别 2 节课 · 1 节异常")
+        page_requests = self.page.evaluate("window.pageRequests")
+        self.assertTrue(page_requests)
+        self.assertTrue(all(urlparse(url).netloc == urlparse(EXTERNAL_ORIGIN).netloc for url in page_requests))
+        with self.downloaded_zip() as archive:
+            report = json.loads(archive.read("字幕导出结果.json"))
+            self.assertEqual([r["status"] for r in report["results"]], ["exported", "no_subtitle"])
+
+    def test_page_fallback_rejects_tab_switched_to_another_origin(self):
+        self.open_batch()
+        self.page.evaluate("""() => {
+            window.blockDirectRequests = true;
+            window.courseTab.url = 'https://example.com/livingroom?course_id=42&sub_id=1';
+        }""")
+        self.export()
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.page.evaluate("window.pageRequests"), [])
+        expect(self.page.locator("#batch-details-text")).to_contain_text("课程标签页已经切换")
 
 
 if __name__ == "__main__":

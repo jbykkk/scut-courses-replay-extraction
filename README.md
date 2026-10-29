@@ -4,6 +4,15 @@
 
 从华南理工大学“百步梯学堂”中提供的课程回放平台“华园视频”提取**课程回放字幕**，支持 JSON、SRT、纯文本三种格式，可批量导出同一课程字幕并打包为ZIP。
 
+本项目会根据课程链接自动选择正确入口：
+
+| 使用环境 | 站点 |
+|------|------|
+| 校内网络 | `https://video.jw.scut.edu.cn` |
+| 校外网络 | `https://video-jw-443.webvpn.scut.edu.cn` |
+
+校外入口由学校 WebVPN 代理校内站点。程序不会绕过 WebVPN 或学校统一认证；使用前仍需由本人正常登录并拥有相应课程的访问权限。
+
 提供两种使用方式：**Chrome/Edge 浏览器插件**和**命令行工具**。
 
 ## 免责声明
@@ -37,11 +46,11 @@ Microsoft Edge 插件安装同理。
 
 ### 使用
 
-> **前提**：必须先在华园视频网站进行华工统一认证完成登录。
+> **前提**：必须先在当前使用的华园视频入口完成登录。校外使用时要先登录 WebVPN，校内和校外登录状态不能互相替代。
 
 #### 单课时下载
 
-1. 打开任意课程播放页面（网址URL应如下：`video.jw.scut.edu.cn/livingroom?...`）
+1. 打开任意课程播放页面：校内地址为 `video.jw.scut.edu.cn/livingroom?...`，校外地址为 `video-jw-443.webvpn.scut.edu.cn/livingroom?...`
 2. 点击浏览器右上角的插件图标，弹窗显示当前课时信息（课程名、教师、课时标题）
 3. 勾选格式（`SRT / TXT / JSON`），点击 **下载字幕**
 
@@ -68,7 +77,7 @@ Microsoft Edge 插件安装同理。
 当前标签页不是华园视频的课程播放页，请先打开一个课程页面。
 
 **下载失败或显示 HTTP 错误**
-登录状态可能已过期，请在华园视频网站重新登录后重试。
+登录状态可能已过期，请在当前使用的华园视频入口重新登录后重试。校外入口需要重新登录 WebVPN。
 
 **部分课时没有字幕**
 新录制的课程可能尚未生成字幕，或平台没有该课时的语音数据。插件会区分“暂无字幕”和“请求失败”，在列表和结果明细中显示原因；即使全部课时都没有字幕，也可以单独下载结果报告。平台返回“未查询到语音数据”时，本工具无法凭回放视频直接生成字幕。
@@ -97,11 +106,17 @@ uv run playwright install chromium
 ### 使用
 
 ```bash
-# 1. 扫码登录（只需一次）
+# 1. 登录校内站点（默认）
 uv run python main.py login
+
+# 校外使用时登录 WebVPN
+uv run python main.py login --site external
 
 # 2. 获取单节课字幕（粘贴课程链接）
 uv run python main.py get "https://video.jw.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
+
+# 校外链接会被自动识别
+uv run python main.py get "https://video-jw-443.webvpn.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
 
 # 交互式输入（不带参数）
 uv run python main.py get
@@ -110,6 +125,9 @@ uv run python main.py get
 
 # 3. 批量导出整门课程
 uv run python main.py get --all "https://video.jw.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
+
+# 校外整门课程同样会自动选择 WebVPN 入口
+uv run python main.py get --all "https://video-jw-443.webvpn.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
 ```
 
 ### 输出
@@ -175,10 +193,10 @@ uv run python -m unittest discover -s tests -v
 ## 已知限制
 
 - **CLI 需要有头浏览器** — headless 模式下播放器不会触发字幕 API 请求
-- **登录状态会过期** — Cookie 失效后需重新扫码
+- **登录状态会过期** — Cookie 失效后需重新扫码登录对应站点
 
 ## 权限说明
 
-插件仅在 `video.jw.scut.edu.cn` 页面运行，用于读取当前课程页面信息与字幕接口响应。
+插件仅在 `video.jw.scut.edu.cn` 和 `video-jw-443.webvpn.scut.edu.cn` 页面运行，用于读取当前课程页面信息与字幕接口响应。
 
 不会上传任何课程数据，也不会收集用户账号信息。

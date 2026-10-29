@@ -14,3 +14,9 @@ data/
 
 # Output subtitles
 output/
+
+# Local review notes
+docs/
+
+# For Code Review
+.pr-review/

@@ -1,58 +1,153 @@
-const API_BASE = "https://video.jw.scut.edu.cn";
-const API = {
-  SUBTITLE: (subId) => `${API_BASE}/courseapi/v3/web-socket/search-trans-result?sub_id=${encodeURIComponent(subId)}&format=json`,
-  SUB_INFO: (courseId, subId) => `${API_BASE}/courseapi/v3/portal-home-setting/get-sub-info?course_id=${encodeURIComponent(courseId)}&sub_id=${encodeURIComponent(subId)}`,
-  COURSE_TITLE: (courseId) => `${API_BASE}/courseapi/v3/multi-search/get-course-teacher-others?course_id=${encodeURIComponent(courseId)}&per_page=1`,
-  CATALOGUE: (courseId) => `${API_BASE}/courseapi/v2/course/catalogue?course_id=${encodeURIComponent(courseId)}`,
-};
+const {
+  SUPPORTED_HOSTS,
+  parseCourseUrl,
+  createApi,
+  extractSubtitleItems,
+  toSrt,
+  toTxt,
+  sanitizeFilename,
+  sanitizeIdForFilename,
+} = ScutSubtitleCore;
 
-// === URL parsing ===
-
-function parseCourseUrl(url) {
-  try {
-    const u = new URL(url);
-    if (u.hostname !== "video.jw.scut.edu.cn") return null;
-    const subId = u.searchParams.get("sub_id");
-    if (!subId) return null;
-    return { subId, courseId: u.searchParams.get("course_id") };
-  } catch {
-    return null;
+class RequestError extends Error {
+  constructor(message, { status = null, kind = "network" } = {}) {
+    super(message);
+    this.name = "RequestError";
+    this.status = status;
+    this.kind = kind;
   }
 }
 
-// === Filename sanitization ===
-
-function sanitizeFilename(name) {
-  const cleaned = name.replace(/[\/\\:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
-  return cleaned || "untitled";
-}
-
-// === API calls ===
-
-async function fetchJson(url) {
+async function directJsonRequest(url) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20000);
     try {
-      const resp = await fetch(url, { credentials: "include", signal: controller.signal });
-      if (!resp.ok) {
-        const error = new Error(`HTTP ${resp.status}`);
-        error.retryable = [408, 429].includes(resp.status) || resp.status >= 500;
-        throw error;
+      let response;
+      try {
+        response = await fetch(url, { credentials: "include", signal: controller.signal });
+      } catch (error) {
+        throw new RequestError(error.name === "AbortError" ? "请求超时，请重试" : (error.message || "网络请求失败"), { kind: "network" });
       }
-      return await resp.json();
-    } catch (err) {
-      if (attempt === 0 && (err.retryable || err.name === "TypeError" || err.name === "AbortError")) {
+      if (!response.ok) {
+        const kind = response.status === 401 || response.status === 403 ? "auth" : "http";
+        throw new RequestError(`HTTP ${response.status}`, { status: response.status, kind });
+      }
+      console.info(`[SCUT] 接口响应：${url} status=${response.status}`);
+      const contentType = response.headers.get("content-type") || "";
+      const text = await response.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new RequestError(
+          `接口正文不是 JSON，可能需要重新登录（Content-Type: ${contentType || "未知"}）`,
+          { kind: "auth" }
+        );
+      }
+    } catch (error) {
+      if (!(error instanceof RequestError)) {
+        error = new RequestError(error.name === "AbortError" ? "请求超时，请重试" : (error.message || "网络请求失败"), { kind: "network" });
+      }
+      const retryable = error.kind === "network" || [408, 429].includes(error.status) || error.status >= 500;
+      if (attempt === 0 && retryable) {
         await new Promise((resolve) => setTimeout(resolve, 500));
         continue;
       }
-      if (err.name === "AbortError") throw new Error("请求超时，请重试");
-      if (err.name === "SyntaxError") throw new Error("接口未返回 JSON，请检查登录状态");
-      throw err;
+      throw error;
     } finally {
       clearTimeout(timer);
     }
   }
+}
+
+async function pageJsonRequest(tabId, expectedOrigin, url) {
+  const tab = await chrome.tabs.get(tabId);
+  const parsed = parseCourseUrl(tab.url || "");
+  if (!parsed || parsed.origin !== expectedOrigin) {
+    throw new RequestError("课程标签页已经切换，请回到原课程页面后重试", { kind: "page" });
+  }
+
+  let injection;
+  try {
+    injection = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: async (requestUrl, origin, supportedHosts) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000);
+        try {
+          const current = new URL(location.href);
+          const target = new URL(requestUrl);
+          if (
+            location.origin !== origin ||
+            target.origin !== origin ||
+            !supportedHosts.includes(current.hostname)
+          ) {
+            return { ok: false, kind: "page", message: "页面来源校验失败" };
+          }
+          const response = await fetch(target.href, { credentials: "include", signal: controller.signal });
+          const contentType = response.headers.get("content-type") || "";
+          if (!response.ok) {
+            return {
+              ok: false,
+              kind: response.status === 401 || response.status === 403 ? "auth" : "http",
+              status: response.status,
+              message: `HTTP ${response.status}`,
+            };
+          }
+          const text = await response.text();
+          try {
+            return { ok: true, data: JSON.parse(text) };
+          } catch {
+            return {
+              ok: false,
+              kind: "auth",
+              message: `接口正文不是 JSON，可能需要重新登录（Content-Type: ${contentType || "未知"}）`,
+            };
+          }
+        } catch (error) {
+          return { ok: false, kind: "network", message: error.name === "AbortError" ? "请求超时，请重试" : (error.message || "页面内请求失败") };
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      args: [url, expectedOrigin, Array.from(SUPPORTED_HOSTS)],
+    });
+  } catch (error) {
+    throw new RequestError(`无法在课程页面内请求：${error.message}`, { kind: "permission" });
+  }
+
+  const result = injection?.[0]?.result;
+  if (!result) throw new RequestError("课程页面没有返回请求结果", { kind: "page" });
+  if (!result.ok) {
+    throw new RequestError(result.message, { status: result.status, kind: result.kind });
+  }
+  return result.data;
+}
+
+function shouldFallback(error) {
+  return error instanceof RequestError && ["network", "auth"].includes(error.kind);
+}
+
+async function requestJson(url, pageContext) {
+  console.info(`[SCUT] 请求接口：${url}`);
+  try {
+    return await directJsonRequest(url);
+  } catch (error) {
+    if (!shouldFallback(error)) throw error;
+    console.info(`[SCUT] 弹窗请求失败（${error.message}），改用课程页面内请求`);
+    return pageJsonRequest(pageContext.tabId, pageContext.origin, url);
+  }
+}
+
+function humanizeError(error) {
+  if (error?.kind === "auth" || error?.status === 401 || error?.status === 403) {
+    return "登录状态已失效，请重新登录 WebVPN/华园视频";
+  }
+  if (error?.kind === "permission") return "插件权限不足，请重新加载扩展后重试";
+  if (error?.status === 404) return "接口不存在或课程链接已失效（HTTP 404）";
+  if (error?.kind === "page") return error.message;
+  return error?.message || "网络或接口请求失败";
 }
 
 function checkApiResult(body) {
@@ -64,40 +159,15 @@ function checkApiResult(body) {
   }
 }
 
-async function fetchSubtitle(subId) {
-  const body = await fetchJson(API.SUBTITLE(subId));
-  // 10002 是平台明确返回的“未查询到语音数据”，区别于登录或请求失败。
+async function loadSubtitle(url, pageContext) {
+  const body = await requestJson(url, pageContext);
+  // 10002 是平台明确返回的“未查询到语音数据”。
   if (String(body?.code) !== "10002") checkApiResult(body);
-  return body;
-}
-
-async function loadSubtitle(subId) {
-  const body = await fetchSubtitle(subId);
   const items = extractSubtitleItems(body);
   return {
     items,
     reason: items.length ? "" : (String(body?.code) === "10002" ? body.msg : "平台暂无字幕数据，可能尚未生成"),
   };
-}
-
-async function fetchCourseInfo(courseId, subId) {
-  const body = await fetchJson(API.SUB_INFO(courseId, subId));
-  checkApiResult(body);
-  return body?.data || null;
-}
-
-async function fetchCourseTitle(courseId) {
-  const body = await fetchJson(API.COURSE_TITLE(courseId));
-  checkApiResult(body);
-  return body?.data?.[0]?.course_title || null;
-}
-
-async function fetchCatalogue(courseId) {
-  const body = await fetchJson(API.CATALOGUE(courseId));
-  checkApiResult(body);
-  const lessons = body?.result?.data;
-  if (!Array.isArray(lessons)) throw new Error("课程目录格式异常，请重试");
-  return lessons;
 }
 
 function classifyLesson(lesson, now = Date.now()) {
@@ -113,125 +183,91 @@ function classifyLesson(lesson, now = Date.now()) {
   }
 }
 
-// === JSON parsing ===
-
-function extractSubtitleItems(body) {
-  if (Array.isArray(body)) {
-    if (body.length > 0 && body[0] && typeof body[0] === "object" && "BeginSec" in body[0]) return body;
-    for (const item of body) {
-      if (item && typeof item === "object") {
-        const inner = extractSubtitleItems(item);
-        if (inner.length > 0) return inner;
-      }
-    }
-    return [];
-  }
-  if (body && typeof body === "object") {
-    for (const key of ["all_content", "data", "result", "list", "rows"]) {
-      const value = body[key];
-      if (value && typeof value === "object") {
-        const inner = extractSubtitleItems(value);
-        if (inner.length > 0) return inner;
-      }
-    }
-  }
-  return [];
-}
-
-// === Format conversion ===
-
-function formatTime(seconds) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds - Math.floor(seconds)) * 1000);
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
-}
-
-function toSrt(items) {
-  let idx = 0;
-  return items
-    .filter((item) => item.Text?.trim())
-    .map((item) => {
-      idx++;
-      const start = formatTime(item.BeginSec);
-      const end = formatTime(item.EndSec || item.BeginSec + 5);
-      return `${idx}\n${start} --> ${end}\n${item.Text.trim()}`;
-    })
-    .join("\n\n");
-}
-
-function toTxt(items) {
-  return items
-    .filter((item) => item.Text?.trim())
-    .map((item) => item.Text.trim())
-    .join("\n");
-}
-
-// === Download ===
-
-function downloadFile(content, filename) {
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-  return downloadBlob(blob, filename);
-}
-
-function downloadBlob(blob, filename) {
+function startDownload(blob, filename) {
   const url = URL.createObjectURL(blob);
   return new Promise((resolve, reject) => {
     chrome.downloads.download({ url, filename, saveAs: false }, (downloadId) => {
       const error = chrome.runtime.lastError;
       URL.revokeObjectURL(url);
-      if (error) reject(new Error(error.message));
-      else resolve(downloadId);
+      if (error || downloadId === undefined) {
+        reject(
+          new RequestError(
+            `浏览器未能创建下载任务：${error?.message || "未知错误"}`,
+            { kind: "permission" }
+          )
+        );
+        return;
+      }
+      resolve(downloadId);
     });
   });
 }
 
+function downloadFile(content, filename) {
+  const type = filename.endsWith(".json")
+    ? "application/json;charset=utf-8"
+    : filename.endsWith(".srt")
+      ? "application/x-subrip;charset=utf-8"
+      : "text/plain;charset=utf-8";
+  return startDownload(new Blob([content], { type }), filename);
+}
+
 async function downloadZip(files, zipName) {
   const zip = new JSZip();
-  for (const { name, content } of files) {
-    zip.file(name, content);
-  }
+  for (const { name, content } of files) zip.file(name, content);
   const blob = await zip.generateAsync({ type: "blob" });
-  await downloadBlob(blob, zipName);
+  return startDownload(blob, zipName);
 }
-
-// === UI helpers ===
 
 function showStatus(id, text, type) {
-  const el = document.getElementById(id);
-  el.textContent = text;
-  el.className = `status ${type}`;
+  const element = document.getElementById(id);
+  element.textContent = text;
+  element.className = `status ${type}`;
 }
-
-// === Main ===
 
 document.addEventListener("DOMContentLoaded", async () => {
   const mainEl = document.getElementById("main");
   const errorEl = document.getElementById("error-page");
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const parsed = parseCourseUrl(tab?.url);
+  const parsed = parseCourseUrl(tab?.url || "");
 
-  if (!parsed) {
+  if (!parsed || tab.id === undefined) {
     errorEl.classList.remove("hidden");
     return;
   }
 
+  const api = createApi(parsed.origin);
+  const pageContext = { tabId: tab.id, origin: parsed.origin };
   const { subId, courseId } = parsed;
   mainEl.classList.remove("hidden");
+  document.getElementById("site-name").textContent =
+    parsed.siteKey === "external" ? "校外 WebVPN" : "校内站点";
 
   let courseTitle = null;
   let catalogue = [];
   let lastReport = null;
   const lessonResults = new Map();
 
+  async function safeRequest(url) {
+    try {
+      const body = await requestJson(url, pageContext);
+      checkApiResult(body);
+      return body;
+    } catch (error) {
+      console.warn(`[SCUT] 可选信息获取失败：${url}`, error);
+      return null;
+    }
+  }
+
   // === Load course info (single tab) ===
   if (courseId) {
-    const [info, title] = await Promise.all([
-      fetchCourseInfo(courseId, subId).catch(() => null),
-      fetchCourseTitle(courseId).catch(() => null),
+    const [infoBody, titleBody] = await Promise.all([
+      safeRequest(api.subInfo(courseId, subId)),
+      safeRequest(api.courseTitle(courseId)),
     ]);
+    const info = infoBody?.data || null;
+    const title = titleBody?.data?.[0]?.course_title || null;
     courseTitle = title;
     if (title) document.getElementById("course-name").textContent = title;
     if (info) {
@@ -273,7 +309,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     showStatus("status-single", "正在获取字幕...", "loading");
 
     try {
-      const { items, reason } = await loadSubtitle(subId);
+      const { items, reason } = await loadSubtitle(api.subtitle(subId), pageContext);
       if (items.length === 0) {
         showStatus("status-single", `该课时暂无字幕：${reason}`, "warning");
         return;
@@ -283,7 +319,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (wantJson) await downloadFile(JSON.stringify(items, null, 2), `subtitle_${subId}.json`);
       showStatus("status-single", `已下载 ${items.length} 条字幕`, "success");
     } catch (err) {
-      showStatus("status-single", err.message || "获取失败", "error");
+      showStatus("status-single", humanizeError(err), "error");
     } finally {
       btn.disabled = false;
     }
@@ -294,12 +330,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   const excluded = { upcoming: 0, live: 0, unavailable: 0 };
   if (courseId) {
     try {
-      const lessons = await fetchCatalogue(courseId);
+      const body = await requestJson(api.catalogue(courseId), pageContext);
+      checkApiResult(body);
+      const lessons = body?.result?.data;
+      if (!Array.isArray(lessons)) throw new Error("课程目录格式异常，请重试");
       const now = Date.now();
       const seen = new Set();
       catalogue = lessons.filter((lesson) => {
-        const sid = String(lesson.sub_id ?? "");
-        if (!sid || seen.has(sid)) return false;
+        let sid;
+        try {
+          sid = ScutSubtitleCore.normalizeNumericId(lesson.sub_id, "sub_id");
+        } catch {
+          console.warn("[SCUT] 跳过包含非法 sub_id 的课程目录项");
+          return false;
+        }
+        if (seen.has(sid)) return false;
         seen.add(sid);
         const state = classifyLesson(lesson, now);
         if (state === "replay") return true;
@@ -307,7 +352,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         return false;
       }).map((lesson) => ({ ...lesson, sub_id: String(lesson.sub_id) }));
     } catch (err) {
-      catalogueError = err.message;
+      catalogueError = humanizeError(err);
     }
   }
 
@@ -433,11 +478,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         const sid = selectedSubIds[i];
         const lesson = catalogue.find((l) => l.sub_id === sid);
         const label = sanitizeFilename(lesson?.title || sid);
-        const prefix = `${String(i + 1).padStart(2, "0")}_${label}_${sid}`;
+        const safeSid = sanitizeIdForFilename(sid, "sub_id");
+        const prefix = `${String(i + 1).padStart(2, "0")}_${label}_${safeSid}`;
         const result = { sub_id: sid, title: lesson?.title || sid };
 
         try {
-          const { items, reason } = await loadSubtitle(sid);
+          const { items, reason } = await loadSubtitle(api.subtitle(sid), pageContext);
           if (items.length > 0) {
             const lessonFiles = [];
             if (wantSrt) lessonFiles.push({ name: `${prefix}.srt`, content: toSrt(items) });
@@ -452,7 +498,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           }
         } catch (err) {
           failed++;
-          Object.assign(result, { status: "error", reason: err.message || "请求失败" });
+          Object.assign(result, { status: "error", reason: humanizeError(err) });
         }
         results.push(result);
         lessonResults.set(sid, result);

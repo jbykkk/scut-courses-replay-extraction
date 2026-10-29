@@ -2,7 +2,13 @@
 
 ## 概述
 
-本工具从华南理工大学"华园视频"平台（`video.jw.scut.edu.cn`）提取课程回放字幕。华园视频在播放课程时，前端通过 API 明文拉取字幕 JSON 数据，无需逆向加密或破解流媒体协议。
+本工具从华南理工大学“华园视频”平台提取课程回放字幕，同时支持校内站点 `video.jw.scut.edu.cn` 和 WebVPN 校外站点 `video-jw-443.webvpn.scut.edu.cn`。华园视频在播放课程时，前端通过 API 拉取字幕 JSON 数据，无需逆向加密或破解流媒体协议。
+
+## 双站点模型
+
+两个站点使用相同的课程页面和 `/courseapi/...` 相对路径，但 origin 与 Cookie 归属不同。程序把站点配置、原始课程 URL、`course_id`、`sub_id` 和 `tenant_code` 组成 `CourseUrl`，后续请求始终继承输入链接所属的 origin。
+
+课程 URL 使用标准库解析并受域名允许列表约束。单课抓取直接打开原始链接；批量抓取只替换 `sub_id`，继续使用相同 origin、`course_id` 和 `tenant_code`。
 
 ## 核心发现
 
@@ -52,17 +58,17 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 
 **关键实现细节**：
 
-1. **登录**：访问 `video.jw.scut.edu.cn`，自动跳转到学校统一认证（`sso.scut.edu.cn`）扫码。登录成功后 `storage_state` 保存到 `data/auth_state.json`。
+1. **登录**：`login --site internal|external` 打开指定入口并完成学校认证，默认保持旧版行为使用 `internal`。登录成功后分别保存为 `data/auth_state_internal.json` 和 `data/auth_state_external.json`，避免不同域名的 Cookie 相互覆盖。校内模式会在新文件不存在时兼容读取旧的 `data/auth_state.json`。
 
-2. **字幕拦截**：必须通过 `livingroom` 页面触发字幕 API 请求。Playwright 用 `page.on("response")` 监听所有响应，匹配 URL 含 `search-trans-result` 的请求。
+2. **字幕拦截**：必须通过 `livingroom` 页面触发字幕 API 请求。Playwright 用 `page.on("response")` 监听所有响应，只接受当前站点 hostname、精确字幕 API path 且查询参数 `sub_id` 与当前任务一致的响应，避免保存页面预加载的其他课时字幕。
 
-3. **JSON 解析**：API 返回多层嵌套（`body.list[].all_content[]`），`_extract_list()` 递归展开直到找到包含 `BeginSec` 字段的数组。
+3. **JSON 解析**：API 返回多层嵌套（`body.list[].all_content[]`），`extract_subtitle_items()` 递归展开直到找到同时包含 `BeginSec` 和 `Text` 字段的字幕数组。
 
-4. **课程目录**：通过 `page.evaluate()` 直接调用 `/courseapi/v2/course/catalogue?course_id=xxx`，无需加载播放页。
+4. **课程目录**：先打开当前站点 origin，再通过 `page.evaluate()` 调用相对路径 `/courseapi/v2/course/catalogue?course_id=xxx`。浏览器自动把相对路径解析到校内或校外 origin。
 
 ### Chrome 插件（Manifest V3）
 
-**原理**：用户已在课程页面登录 → 插件直接 `fetch` 字幕 API（浏览器自动带 Cookie）→ 解析 JSON → 生成文件下载。
+**原理**：用户已在课程页面登录 → 插件从当前标签页提取 origin → 构造同站点 API → 直接 `fetch`；遇到网络、认证或跨域限制时在课程标签页内回退请求一次 → 解析 JSON → 生成文件下载。
 
 **技术栈**：
 - Chrome Extension Manifest V3
@@ -72,28 +78,33 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 **文件结构**：
 | 文件 | 职责 |
 |------|------|
-| `extension/manifest.json` | 插件配置，声明 `activeTab`、`downloads` 权限和 `host_permissions` |
+| `extension/manifest.json` | 声明 `activeTab`、`downloads`、`scripting` 和两个站点权限 |
 | `extension/popup.html` | 弹窗 UI（当前课时 / 全部课时双标签页） |
-| `extension/popup.js` | URL 解析、API 调用、格式转换、文件下载 |
+| `extension/core.js` | URL 解析、动态 API、字幕解析和格式转换纯函数 |
+| `extension/popup.js` | 接口请求、页面内回退、UI 和文件下载 |
 | `extension/jszip.min.js` | JSZip 库，用于 ZIP 打包 |
 
 **关键实现细节**：
 
-1. **无需登录逻辑**：插件运行在用户已登录的浏览器会话中，`fetch` 设置 `credentials: "include"` 自动携带 Cookie。
+1. **无需保存登录凭证**：插件使用当前浏览器会话，`fetch` 设置 `credentials: "include"`。若弹窗上下文受到 Cookie/CORS 限制，则通过 `chrome.scripting.executeScript` 在已验证的课程标签页中重试。
 
-2. **URL 解析**：通过 `chrome.tabs.query` 获取当前标签页 URL，`URLSearchParams` 提取 `sub_id` 和 `course_id`。
+2. **URL 解析**：通过 `chrome.tabs.query` 获取当前标签页 URL，验证 HTTPS、允许域名和 `/livingroom` 路径，再用 `URLSearchParams` 提取参数。API 根地址取 `URL.origin`，不写死某个站点。
 
 3. **批量导出**：调用 `/courseapi/v2/course/catalogue` 获取课程目录，使用 `start_at` 和 `status` 筛选截至当前可回放（`status=6`）的课时，并将 `sub_id` 统一为字符串、去重。未开课、直播中和暂无回放的记录不参与全选或字幕请求。循环获取所选回放字幕，JSZip 打包后通过 `chrome.downloads` 下载。
 
    字幕接口的 `code=10002`（“未查询到语音数据”）单独记为“暂无字幕”；登录等其他业务错误和 HTTP 错误记为“请求失败”。每次回放的结果显示在界面，ZIP 内附 `字幕导出结果.json`，无可导出字幕时也可单独下载报告。请求有 20 秒超时，对网络错误、408、429 和 5xx 自动重试一次。元信息请求失败不会阻止字幕导出，打包或浏览器下载失败后会恢复操作按钮。
 
-4. **与 CLI 共享逻辑**：JSON 递归解析（`extractSubtitleItems`）和格式转换（`toSrt`、`toTxt`）逻辑一致，JS 版本从 Python 版本移植。
+4. **与 CLI 共享逻辑**：JSON 递归解析（`extractSubtitleItems`）和格式转换（`toSrt`、`toTxt`）逻辑一致。两端读取 `tests/fixtures/` 中同一组 URL 与字幕转换向量，防止实现再次分叉。SRT 要求有效开始时间，缺失结束时间使用 `+5s`；TXT 只依赖非空文本。
+
+## 输入与文件路径安全
+
+课程 URL 仅接受受信任 HTTPS 域名、标准端口和 `/livingroom` 路径，拒绝用户名、密码、重复关键参数及非数字 ID。CLI 写文件前会再次验证 `sub_id`、清理课程名，并对三个最终路径调用 `resolve()` 后执行目录包含关系检查。扩展对 API 参数和 ZIP entry 中的 ID 执行同样的二次验证。
 
 ## 两种方式的对比
 
 | | CLI | Chrome 插件 |
 |---|---|---|
-| 登录 | Playwright 扫码，状态持久化 | 用户自行登录 |
+| 登录 | Playwright 登录，校内外状态分开持久化 | 用户在对应站点自行登录 |
 | 字幕获取 | 网络拦截（需加载播放页） | 直接 fetch API |
 | 批量导出 | 需逐个打开标签页 | 直接循环 fetch，ZIP 打包 |
 | 依赖 | Python + Playwright + Chromium | 无（纯浏览器插件） |
