@@ -5,13 +5,20 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   regression:
-    runs-on: ubuntu-latest
+    # Match the operating system supported by the Playwright version in uv.lock.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -32,11 +39,19 @@ jobs:
       - name: Sync locked dependencies
         run: uv sync --locked
 
+      - name: Show test environment
+        run: |
+          cat /etc/os-release
+          node --version
+          uv --version
+          uv run --locked python --version
+          uv run --locked python -m playwright --version
+
       - name: Install test browser
-        run: uv run playwright install --with-deps chromium
+        run: uv run --locked python -m playwright install --with-deps --only-shell chromium
 
       - name: Run regression checks
         env:
           CHECK_BASE_REF: ${{ github.base_ref }}
           CHECK_BEFORE_SHA: ${{ github.event.before }}
-        run: uv run python scripts/check.py
+        run: uv run --locked python scripts/check.py

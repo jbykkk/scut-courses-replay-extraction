@@ -24,6 +24,8 @@ uv run python scripts/check.py
 
 纯文档修改通常不需要新增测试，但仍建议运行统一检查。
 
+CI 固定使用 Ubuntu 24.04、Python 3.12 和 Node.js 24，并按 `uv.lock` 安装依赖；浏览器测试仅安装 Chromium headless shell。升级 Playwright 或 runner 时应一起核对系统兼容性。CI 日志会输出环境版本，同一分支的新运行会取消旧运行，也可通过 Actions 手动触发。
+
 ## 2. 实机验证
 
 登录、课程接口和浏览器下载依赖真实环境，无法完全由自动测试验证。改动涉及 CLI 抓取、校内站点、WebVPN 或浏览器扩展时，请提供**截图或简短录屏**，至少展示：
