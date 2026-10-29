@@ -29,35 +29,95 @@ function sanitizeFilename(name) {
 
 // === API calls ===
 
+async function fetchJson(url) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    try {
+      const resp = await fetch(url, { credentials: "include", signal: controller.signal });
+      if (!resp.ok) {
+        const error = new Error(`HTTP ${resp.status}`);
+        error.retryable = [408, 429].includes(resp.status) || resp.status >= 500;
+        throw error;
+      }
+      return await resp.json();
+    } catch (err) {
+      if (attempt === 0 && (err.retryable || err.name === "TypeError" || err.name === "AbortError")) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      if (err.name === "AbortError") throw new Error("请求超时，请重试");
+      if (err.name === "SyntaxError") throw new Error("接口未返回 JSON，请检查登录状态");
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function checkApiResult(body) {
+  for (const result of [body?.result, body]) {
+    if (!result || typeof result !== "object") continue;
+    if (result.success === false || (result.code != null && !["0", "200"].includes(String(result.code)))) {
+      throw new Error(result.msg || result.message || (result.code != null ? `接口错误 ${result.code}` : "接口返回失败"));
+    }
+  }
+}
+
 async function fetchSubtitle(subId) {
-  const resp = await fetch(API.SUBTITLE(subId), { credentials: "include" });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return resp.json();
+  const body = await fetchJson(API.SUBTITLE(subId));
+  // 10002 是平台明确返回的“未查询到语音数据”，区别于登录或请求失败。
+  if (String(body?.code) !== "10002") checkApiResult(body);
+  return body;
+}
+
+async function loadSubtitle(subId) {
+  const body = await fetchSubtitle(subId);
+  const items = extractSubtitleItems(body);
+  return {
+    items,
+    reason: items.length ? "" : (String(body?.code) === "10002" ? body.msg : "平台暂无字幕数据，可能尚未生成"),
+  };
 }
 
 async function fetchCourseInfo(courseId, subId) {
-  const resp = await fetch(API.SUB_INFO(courseId, subId), { credentials: "include" });
-  if (!resp.ok) return null;
-  return (await resp.json())?.data || null;
+  const body = await fetchJson(API.SUB_INFO(courseId, subId));
+  checkApiResult(body);
+  return body?.data || null;
 }
 
 async function fetchCourseTitle(courseId) {
-  const resp = await fetch(API.COURSE_TITLE(courseId), { credentials: "include" });
-  if (!resp.ok) return null;
-  return (await resp.json())?.data?.[0]?.course_title || null;
+  const body = await fetchJson(API.COURSE_TITLE(courseId));
+  checkApiResult(body);
+  return body?.data?.[0]?.course_title || null;
 }
 
 async function fetchCatalogue(courseId) {
-  const resp = await fetch(API.CATALOGUE(courseId), { credentials: "include" });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return (await resp.json())?.result?.data || [];
+  const body = await fetchJson(API.CATALOGUE(courseId));
+  checkApiResult(body);
+  const lessons = body?.result?.data;
+  if (!Array.isArray(lessons)) throw new Error("课程目录格式异常，请重试");
+  return lessons;
+}
+
+function classifyLesson(lesson, now = Date.now()) {
+  const start = Number(lesson.start_at);
+  const startMs = start < 1e12 ? start * 1000 : start;
+  if (Number.isFinite(startMs) && startMs > now) return "upcoming";
+  // 平台状态：6 可回放，1 直播中，2 未开始，3 回放生成中，5 无回放。
+  switch (String(lesson.status)) {
+    case "6": return "replay";
+    case "2": return "upcoming";
+    case "1": return "live";
+    default: return "unavailable";
+  }
 }
 
 // === JSON parsing ===
 
 function extractSubtitleItems(body) {
   if (Array.isArray(body)) {
-    if (body.length > 0 && typeof body[0] === "object" && "BeginSec" in body[0]) return body;
+    if (body.length > 0 && body[0] && typeof body[0] === "object" && "BeginSec" in body[0]) return body;
     for (const item of body) {
       if (item && typeof item === "object") {
         const inner = extractSubtitleItems(item);
@@ -69,7 +129,7 @@ function extractSubtitleItems(body) {
   if (body && typeof body === "object") {
     for (const key of ["all_content", "data", "result", "list", "rows"]) {
       const value = body[key];
-      if (Array.isArray(value) && value.length > 0) {
+      if (value && typeof value === "object") {
         const inner = extractSubtitleItems(value);
         if (inner.length > 0) return inner;
       }
@@ -112,8 +172,19 @@ function toTxt(items) {
 
 function downloadFile(content, filename) {
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  return downloadBlob(blob, filename);
+}
+
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
-  chrome.downloads.download({ url, filename, saveAs: false }, () => URL.revokeObjectURL(url));
+  return new Promise((resolve, reject) => {
+    chrome.downloads.download({ url, filename, saveAs: false }, (downloadId) => {
+      const error = chrome.runtime.lastError;
+      URL.revokeObjectURL(url);
+      if (error) reject(new Error(error.message));
+      else resolve(downloadId);
+    });
+  });
 }
 
 async function downloadZip(files, zipName) {
@@ -122,8 +193,7 @@ async function downloadZip(files, zipName) {
     zip.file(name, content);
   }
   const blob = await zip.generateAsync({ type: "blob" });
-  const url = URL.createObjectURL(blob);
-  chrome.downloads.download({ url, filename: zipName, saveAs: false }, () => URL.revokeObjectURL(url));
+  await downloadBlob(blob, zipName);
 }
 
 // === UI helpers ===
@@ -141,7 +211,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const errorEl = document.getElementById("error-page");
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const parsed = parseCourseUrl(tab.url);
+  const parsed = parseCourseUrl(tab?.url);
 
   if (!parsed) {
     errorEl.classList.remove("hidden");
@@ -153,12 +223,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   let courseTitle = null;
   let catalogue = [];
+  let lastReport = null;
+  const lessonResults = new Map();
 
   // === Load course info (single tab) ===
   if (courseId) {
     const [info, title] = await Promise.all([
-      fetchCourseInfo(courseId, subId),
-      fetchCourseTitle(courseId),
+      fetchCourseInfo(courseId, subId).catch(() => null),
+      fetchCourseTitle(courseId).catch(() => null),
     ]);
     courseTitle = title;
     if (title) document.getElementById("course-name").textContent = title;
@@ -201,15 +273,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     showStatus("status-single", "正在获取字幕...", "loading");
 
     try {
-      const raw = await fetchSubtitle(subId);
-      const items = extractSubtitleItems(raw);
+      const { items, reason } = await loadSubtitle(subId);
       if (items.length === 0) {
-        showStatus("status-single", "该课时暂无字幕数据", "error");
+        showStatus("status-single", `该课时暂无字幕：${reason}`, "warning");
         return;
       }
-      if (wantSrt) downloadFile(toSrt(items), `subtitle_${subId}.srt`);
-      if (wantTxt) downloadFile(toTxt(items), `subtitle_${subId}.txt`);
-      if (wantJson) downloadFile(JSON.stringify(items, null, 2), `subtitle_${subId}.json`);
+      if (wantSrt) await downloadFile(toSrt(items), `subtitle_${subId}.srt`);
+      if (wantTxt) await downloadFile(toTxt(items), `subtitle_${subId}.txt`);
+      if (wantJson) await downloadFile(JSON.stringify(items, null, 2), `subtitle_${subId}.json`);
       showStatus("status-single", `已下载 ${items.length} 条字幕`, "success");
     } catch (err) {
       showStatus("status-single", err.message || "获取失败", "error");
@@ -219,21 +290,50 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // === Batch: load catalogue ===
+  let catalogueError = null;
+  const excluded = { upcoming: 0, live: 0, unavailable: 0 };
   if (courseId) {
     try {
-      catalogue = await fetchCatalogue(courseId);
-    } catch {
-      catalogue = [];
+      const lessons = await fetchCatalogue(courseId);
+      const now = Date.now();
+      const seen = new Set();
+      catalogue = lessons.filter((lesson) => {
+        const sid = String(lesson.sub_id ?? "");
+        if (!sid || seen.has(sid)) return false;
+        seen.add(sid);
+        const state = classifyLesson(lesson, now);
+        if (state === "replay") return true;
+        excluded[state]++;
+        return false;
+      }).map((lesson) => ({ ...lesson, sub_id: String(lesson.sub_id) }));
+    } catch (err) {
+      catalogueError = err.message;
     }
   }
 
   const listEl = document.getElementById("lesson-list");
   const countEl = document.getElementById("lesson-count");
+  const selectAll = document.getElementById("select-all");
+  const batchBtn = document.getElementById("batch-download-btn");
+  function updateCourseSummary() {
+    const problems = Array.from(lessonResults.values()).filter((result) => result.status !== "exported").length;
+    let text = catalogueError ? "" : `已识别 ${catalogue.length} 节课`;
+    if (problems > 0 || (catalogue.length > 0 && lessonResults.size === catalogue.length)) {
+      text += ` · ${problems} 节异常`;
+    }
+    document.getElementById("catalogue-note").textContent = text;
+  }
+  updateCourseSummary();
 
   if (catalogue.length === 0) {
-    countEl.textContent = "未找到课程目录";
+    countEl.textContent = catalogueError ? "课程目录加载失败" : "当前没有可导出的回放";
+    selectAll.checked = false;
+    selectAll.disabled = true;
+    batchBtn.disabled = true;
+    if (catalogueError) showStatus("status-batch", catalogueError, "error");
   } else {
-    countEl.textContent = `已选 ${catalogue.length} / ${catalogue.length} 节`;
+    batchBtn.disabled = false;
+    countEl.textContent = `已选 ${catalogue.length} / ${catalogue.length} 次回放`;
 
     catalogue.forEach((lesson) => {
       const item = document.createElement("div");
@@ -251,10 +351,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       item.appendChild(checkbox);
       item.appendChild(label);
+      const result = document.createElement("span");
+      result.className = "lesson-result";
+      result.dataset.subId = lesson.sub_id;
+      item.appendChild(result);
       listEl.appendChild(item);
     });
 
-    const selectAll = document.getElementById("select-all");
     selectAll.addEventListener("change", () => {
       listEl.querySelectorAll(".lesson-check").forEach((c) => (c.checked = selectAll.checked));
       updateCount();
@@ -273,9 +376,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   function updateCount() {
     const total = catalogue.length;
     const selected = getSelectedLessons().length;
-    countEl.textContent = `已选 ${selected} / ${total} 节`;
-    document.getElementById("select-all").checked = selected === total;
+    countEl.textContent = `已选 ${selected} / ${total} 次回放`;
+    selectAll.checked = total > 0 && selected === total;
+    selectAll.indeterminate = selected > 0 && selected < total;
   }
+
+  document.getElementById("report-download-btn").addEventListener("click", async () => {
+    if (!lastReport) return;
+    try {
+      await downloadFile(JSON.stringify(lastReport, null, 2), "字幕导出结果.json");
+    } catch (err) {
+      showStatus("status-batch", `报告下载失败：${err.message}`, "error");
+    }
+  });
 
   // === Batch download ===
   document.getElementById("batch-download-btn").addEventListener("click", async () => {
@@ -295,55 +408,89 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     const btn = document.getElementById("batch-download-btn");
     btn.disabled = true;
+    const controls = document.querySelectorAll("#tab-batch input");
+    controls.forEach((control) => (control.disabled = true));
+    const reportBtn = document.getElementById("report-download-btn");
+    reportBtn.classList.add("hidden");
+    const details = document.getElementById("batch-details");
+    details.classList.add("hidden");
+    lastReport = null;
     const progressBar = document.getElementById("batch-progress-bar");
     const progressFill = document.getElementById("batch-progress-fill");
+    progressFill.style.width = "0%";
     progressBar.classList.remove("hidden");
     showStatus("status-batch", `正在获取 0/${selectedSubIds.length}...`, "loading");
 
     const files = [];
-    const failed = [];
+    const results = [];
     let successLessons = 0;
+    let noSubtitles = 0;
+    let failed = 0;
 
-    for (let i = 0; i < selectedSubIds.length; i++) {
-      const sid = selectedSubIds[i];
-      const lesson = catalogue.find((l) => l.sub_id === sid);
-      const label = sanitizeFilename(lesson?.title || sid);
-      const prefix = `${String(i + 1).padStart(2, "0")}_${label}_${sid}`;
+    try {
+      for (const resultEl of listEl.querySelectorAll(".lesson-result")) resultEl.textContent = "";
+      for (let i = 0; i < selectedSubIds.length; i++) {
+        const sid = selectedSubIds[i];
+        const lesson = catalogue.find((l) => l.sub_id === sid);
+        const label = sanitizeFilename(lesson?.title || sid);
+        const prefix = `${String(i + 1).padStart(2, "0")}_${label}_${sid}`;
+        const result = { sub_id: sid, title: lesson?.title || sid };
 
-      try {
-        const raw = await fetchSubtitle(sid);
-        const items = extractSubtitleItems(raw);
-        if (items.length > 0) {
-          if (wantSrt) files.push({ name: `${prefix}.srt`, content: toSrt(items) });
-          if (wantTxt) files.push({ name: `${prefix}.txt`, content: toTxt(items) });
-          if (wantJson) files.push({ name: `${prefix}.json`, content: JSON.stringify(items, null, 2) });
-          successLessons++;
-        } else {
-          failed.push(label);
-          console.warn(`[SCUT] 课时 "${label}" (${sid}) 无字幕数据`);
+        try {
+          const { items, reason } = await loadSubtitle(sid);
+          if (items.length > 0) {
+            const lessonFiles = [];
+            if (wantSrt) lessonFiles.push({ name: `${prefix}.srt`, content: toSrt(items) });
+            if (wantTxt) lessonFiles.push({ name: `${prefix}.txt`, content: toTxt(items) });
+            if (wantJson) lessonFiles.push({ name: `${prefix}.json`, content: JSON.stringify(items, null, 2) });
+            files.push(...lessonFiles);
+            successLessons++;
+            Object.assign(result, { status: "exported", subtitle_count: items.length });
+          } else {
+            noSubtitles++;
+            Object.assign(result, { status: "no_subtitle", reason });
+          }
+        } catch (err) {
+          failed++;
+          Object.assign(result, { status: "error", reason: err.message || "请求失败" });
         }
-      } catch (err) {
-        failed.push(label);
-        console.warn(`[SCUT] 课时 "${label}" (${sid}) 获取失败:`, err.message);
+        results.push(result);
+        lessonResults.set(sid, result);
+        updateCourseSummary();
+        const resultEl = Array.from(listEl.querySelectorAll(".lesson-result")).find((el) => el.dataset.subId === sid);
+        resultEl.textContent = result.status === "exported" ? "已导出" : result.status === "no_subtitle" ? "暂无字幕" : "请求失败";
+        resultEl.title = result.reason || `${result.subtitle_count} 条字幕`;
+
+        const pct = Math.round(((i + 1) / selectedSubIds.length) * 100);
+        progressFill.style.width = `${pct}%`;
+        showStatus("status-batch", `正在获取 ${i + 1}/${selectedSubIds.length}...`, "loading");
       }
 
-      const pct = Math.round(((i + 1) / selectedSubIds.length) * 100);
-      progressFill.style.width = `${pct}%`;
-      showStatus("status-batch", `正在获取 ${i + 1}/${selectedSubIds.length}...`, "loading");
-    }
+      lastReport = {
+        course_id: courseId, course_title: courseTitle, exported_at: new Date().toISOString(),
+        excluded, results,
+      };
+      reportBtn.classList.remove("hidden");
+      const missing = results.filter((result) => result.status !== "exported");
+      document.getElementById("batch-details-text").textContent = missing.map((result) =>
+        `${result.title} (${result.sub_id})：${result.status === "no_subtitle" ? "暂无字幕" : "请求失败"} — ${result.reason}`
+      ).join("\n");
+      if (missing.length) details.classList.remove("hidden");
 
-    if (files.length > 0) {
-      const zipName = sanitizeFilename(`${courseTitle || "subtitles"}.zip`);
-      await downloadZip(files, zipName);
-      const summary = `${successLessons} 节成功，${failed.length} 节失败，${files.length} 个文件`;
-      const msg = failed.length > 0
-        ? `完成：${summary}（失败：${failed.slice(0, 3).join("、")}${failed.length > 3 ? "..." : ""}）`
-        : `完成：${summary}`;
-      showStatus("status-batch", msg, "success");
-    } else {
-      showStatus("status-batch", "未能获取任何字幕数据", "error");
+      if (files.length > 0) {
+        files.push({ name: "字幕导出结果.json", content: JSON.stringify(lastReport, null, 2) });
+        showStatus("status-batch", "正在打包 ZIP...", "loading");
+        await downloadZip(files, sanitizeFilename(`${courseTitle || `subtitles_${courseId}`}.zip`));
+        showStatus("status-batch", `完成：${successLessons} 次回放已导出，${noSubtitles} 次暂无字幕，${failed} 次请求失败`,
+          missing.length ? "warning" : "success");
+      } else {
+        showStatus("status-batch", `没有可导出的字幕：${noSubtitles} 次暂无字幕，${failed} 次请求失败。可下载结果报告查看原因。`, "warning");
+      }
+    } catch (err) {
+      showStatus("status-batch", `导出失败：${err.message}`, "error");
+    } finally {
+      btn.disabled = false;
+      controls.forEach((control) => (control.disabled = false));
     }
-
-    btn.disabled = false;
   });
 });

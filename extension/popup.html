@@ -88,7 +88,11 @@
     .lesson-item:last-child { border-bottom: none; }
     .lesson-item input[type="checkbox"] { width: 15px; height: 15px; accent-color: #1a73e8; flex-shrink: 0; }
     .lesson-title { flex: 1; }
-    .lesson-size { font-size: 11px; color: #999; }
+    .lesson-result { font-size: 11px; color: #666; flex-shrink: 0; }
+    .note { font-size: 12px; color: #666; line-height: 1.5; margin-bottom: 10px; }
+    .batch-details { font-size: 12px; margin-top: 10px; }
+    .batch-details pre { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; line-height: 1.5; max-height: 180px; overflow-y: auto; }
+    .report-btn { margin-top: 10px; padding: 6px 10px; cursor: pointer; }
 
     .progress-bar {
       height: 4px;
@@ -111,6 +115,7 @@
     }
     .status.success { background: #e8f5e9; color: #2e7d32; }
     .status.error { background: #fbe9e7; color: #c62828; }
+    .status.warning { background: #fff3e0; color: #8a4b00; }
     .status.loading { background: #e3f2fd; color: #1565c0; }
     .status.hidden { display: none; }
 
@@ -168,6 +173,7 @@
     <!-- Batch tab -->
     <div id="tab-batch" class="tab-content">
       <div class="content">
+        <p class="note" id="catalogue-note"></p>
         <div class="lesson-list" id="lesson-list">
           <div class="lesson-list-header">
             <input type="checkbox" id="select-all" checked>
@@ -182,8 +188,14 @@
         <div class="progress-bar hidden" id="batch-progress-bar">
           <div class="progress-bar-fill" id="batch-progress-fill"></div>
         </div>
-        <button class="btn" id="batch-download-btn">下载全部 (ZIP)</button>
+        <p class="note">下载期间请保持此弹窗打开。</p>
+        <button class="btn" id="batch-download-btn" disabled>下载所选回放字幕 (ZIP)</button>
         <div id="status-batch" class="status hidden"></div>
+        <details id="batch-details" class="batch-details hidden">
+          <summary>查看未导出的课时及原因</summary>
+          <pre id="batch-details-text"></pre>
+        </details>
+        <button id="report-download-btn" class="report-btn hidden">下载导出结果报告</button>
       </div>
     </div>
   </div>

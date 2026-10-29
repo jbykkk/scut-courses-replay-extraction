@@ -83,7 +83,9 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 
 2. **URL 解析**：通过 `chrome.tabs.query` 获取当前标签页 URL，`URLSearchParams` 提取 `sub_id` 和 `course_id`。
 
-3. **批量导出**：调用 `/courseapi/v2/course/catalogue` 获取课程目录，循环 `fetch` 每节课的字幕，JSZip 打包后通过 `chrome.downloads` 下载。
+3. **批量导出**：调用 `/courseapi/v2/course/catalogue` 获取课程目录，使用 `start_at` 和 `status` 筛选截至当前可回放（`status=6`）的课时，并将 `sub_id` 统一为字符串、去重。未开课、直播中和暂无回放的记录不参与全选或字幕请求。循环获取所选回放字幕，JSZip 打包后通过 `chrome.downloads` 下载。
+
+   字幕接口的 `code=10002`（“未查询到语音数据”）单独记为“暂无字幕”；登录等其他业务错误和 HTTP 错误记为“请求失败”。每次回放的结果显示在界面，ZIP 内附 `字幕导出结果.json`，无可导出字幕时也可单独下载报告。请求有 20 秒超时，对网络错误、408、429 和 5xx 自动重试一次。元信息请求失败不会阻止字幕导出，打包或浏览器下载失败后会恢复操作按钮。
 
 4. **与 CLI 共享逻辑**：JSON 递归解析（`extractSubtitleItems`）和格式转换（`toSrt`、`toTxt`）逻辑一致，JS 版本从 Python 版本移植。
 
