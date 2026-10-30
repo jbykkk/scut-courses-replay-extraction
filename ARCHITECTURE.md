@@ -2,7 +2,7 @@
 
 ## 概述
 
-本工具从华南理工大学“华园视频”平台提取课程回放字幕，同时支持校内站点 `video.jw.scut.edu.cn` 和 WebVPN 校外站点 `video-jw-443.webvpn.scut.edu.cn`。华园视频在播放课程时，前端通过 API 拉取字幕 JSON 数据，无需逆向加密或破解流媒体协议。
+本工具从华南理工大学“华园视频”平台提取课程回放字幕，同时支持校内站点 `video.jw.scut.edu.cn` 和 WebVPN 校外站点 `video-jw-443.webvpn.scut.edu.cn`。华园视频在播放课程时，前端通过 API 拉取字幕 JSON 数据，无需逆向加密或破解流媒体协议。对于平台没有生成字幕的课时，CLI 可单独从普通 MP4 回放提取音轨，供后续 ASR 使用。
 
 ## 双站点模型
 
@@ -53,6 +53,7 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 | `main.py` | CLI 入口，argparse 命令路由 |
 | `browser.py` | Playwright 浏览器管理、网络拦截、API 直接调用 |
 | `subtitle.py` | JSON → SRT/TXT 格式转换、文件保存 |
+| `audio.py` | 缺字幕报告读取、媒体选择、ffmpeg 音轨提取、ffprobe 校验与媒体清单 |
 | `config.py` | URL、路径、超时等常量 |
 | `auth.py` | 登录状态持久化（Playwright `storage_state`） |
 
@@ -65,6 +66,14 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 3. **JSON 解析**：API 返回多层嵌套（`body.list[].all_content[]`），`extract_subtitle_items()` 递归展开直到找到同时包含 `BeginSec` 和 `Text` 字段的字幕数组。
 
 4. **课程目录**：先打开当前站点 origin，再通过 `page.evaluate()` 调用相对路径 `/courseapi/v2/course/catalogue?course_id=xxx`。浏览器自动把相对路径解析到校内或校外 origin。
+
+5. **回放音频**：`audio` 支持课程链接、`--course-id`/`--sub-id`、插件的 `字幕导出结果.json`；报告默认仅选 `no_subtitle`，`--include-errors` 加入 `error`。所有 ID 在浏览器启动前校验，输入课程和站点冲突时拒绝执行。`browser.get_replay_info()` 在目标 origin 内携带登录 Cookie 请求 `get-sub-info`，超时为 20 秒，并检查 HTTP、业务状态和 JSON 结构。
+
+   媒体选择顺序为 `content.save_playback.contents` → `content.playback.url` → `video_list`（优先 `type=3` 教师画面）→ `playurl`。仅接受 HTTP(S) 地址，当前不处理 HLS 或需要媒体 Cookie 的回放。获取接口所需的登录态由 Playwright 管理；ffmpeg 读取平台返回的可直接访问的媒体 URL。
+
+   ffmpeg 使用 `-map 0:a:0 -vn -c:a copy -movflags +faststart` 提取首个音轨，不转码；网络读取超时为 30 秒。异步子进程避免阻塞浏览器事件循环，取消任务时会终止子进程并清理临时文件。输出按 `course_id` 分目录，日期和 ID 组成文件名；路径解析后检查目录包含关系。下载到同目录的唯一临时文件，ffprobe 校验音轨与时长后原子替换。已有有效文件默认跳过，失败重下不会损坏原文件。
+
+   每门课的 `媒体地址.json` 原子更新，保留其他课时以及跳过文件原有的下载时间。损坏清单报错，不静默覆盖。`--dry-run` 仅请求并显示课时信息，不依赖 ffmpeg 或写本地文件。批量任务默认继续处理后续课时，任何失败使命令退出码为 1。
 
 ### Chrome 插件（Manifest V3）
 
@@ -81,7 +90,13 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 | `extension/manifest.json` | 声明 `activeTab`、`downloads`、`scripting` 和两个站点权限 |
 | `extension/popup.html` | 弹窗 UI（当前课时 / 全部课时双标签页） |
 | `extension/core.js` | URL 解析、动态 API、字幕解析和格式转换纯函数 |
-| `extension/popup.js` | 接口请求、页面内回退、UI 和文件下载 |
+| `extension/popup.js` | 字幕界面、字幕文件下载和音频任务入口 |
+| `extension/requests.js` | 字幕与音频共享的 JSON 请求、超时重试和课程页面内回退 |
+| `extension/audio-core.js` | 音频任务参数验证、媒体选择、文件名和 WebVPN 媒体地址处理 |
+| `extension/audio.html` / `audio-page.mjs` | 独立音频任务页面、逐节下载、取消、重试与结果报告 |
+| `extension/mp4-audio.mjs` | 流式读取 MP4、选择 AAC 音轨并封装为 M4A |
+| `extension/audio-download.mjs` | 跟踪 Chrome 下载完成/中断，管理 Blob 生命周期 |
+| `extension/vendor/` | MP4Box.js 2.5.0 的固定 ESM 发布包、来源校验信息与 BSD 许可证 |
 | `extension/jszip.min.js` | JSZip 库，用于 ZIP 打包 |
 
 **关键实现细节**：
@@ -95,6 +110,12 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
    字幕接口的 `code=10002`（“未查询到语音数据”）单独记为“暂无字幕”；登录等其他业务错误和 HTTP 错误记为“请求失败”。每次回放的结果显示在界面，ZIP 内附 `字幕导出结果.json`，无可导出字幕时也可单独下载报告。请求有 20 秒超时，对网络错误、408、429 和 5xx 自动重试一次。元信息请求失败不会阻止字幕导出，打包或浏览器下载失败后会恢复操作按钮。
 
 4. **与 CLI 共享逻辑**：JSON 递归解析（`extractSubtitleItems`）和格式转换（`toSrt`、`toTxt`）逻辑一致。两端读取 `tests/fixtures/` 中同一组 URL 与字幕转换向量，防止实现再次分叉。SRT 要求有效开始时间，缺失结束时间使用 `+5s`；TXT 只依赖非空文本。
+
+5. **浏览器内音频下载**：弹窗提供当前课时、已选回放和本次报告中的 `no_subtitle` 课时三个入口，将 origin、课程/课时 ID 和来源标签页 ID 传给独立的 `audio.html` 标签页。批量下载统一按复选框中的已选课时执行，按钮显示已选数量；列表顶部复选框控制全选/全不选，没有单独绕过勾选状态的全部下载入口。字幕导出期间所有音频入口禁用。参数在音频页再次验证，API 使用与字幕完全相同的 `requests.js`。媒体优先级与 CLI 一致；仅允许已有两个受信站点的 HTTPS 媒体，校外任务会把元信息中残留的校内绝对媒体地址映射到 WebVPN origin，不新增站点权限。
+
+   音频页串行处理课时，使用内置 MP4Box.js 保留并解析 MP4 数据（兼容 moov 位于文件末尾），只选择 AAC 音轨并生成音频初始化段与媒体片段。每 1000 个样本输出一段并释放样本副本，结束时检查已输出样本数与轨道总样本数一致，再生成带 M4A 容器标识、MIME 为 `audio/x-m4a` 的 Blob，避免 Chrome 自动改用 `.mp4` 扩展名。此过程只封装，不转码。读取媒体时有 30 秒空闲超时和 1 GB 上限；取消操作中止 fetch 并清理解析状态。MP4 数据和生成的音频会占用浏览器内存，任务页关闭会中止尚未完成的提取。
+
+   `audio-download.mjs` 通过 `chrome.downloads.onChanged` 和 `search` 确认文件保存完成或中断，完成后才释放 Blob URL。失败课时保留原因并可重试，已成功保存的课时不重复执行；用户可保存包含成功媒体清单和逐课结果的 JSON。字幕下载过程中的音频入口会禁用，防止新标签页关闭弹窗；字幕格式转换、ZIP 和字幕报告逻辑不变。插件无须运行本地 CLI，也不会加载远程脚本。
 
 ## 输入与文件路径安全
 

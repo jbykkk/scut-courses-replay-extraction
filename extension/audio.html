@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>回放音频下载 · SCUT</title>
+  <link rel="stylesheet" href="audio.css">
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">SCUT 课程回放</p><h1>下载回放音频</h1></header>
+    <p class="note">从回放中提取 M4A 音频，供复习或语音转写使用。下载时请保留本页；可以关闭插件弹窗。</p>
+    <p class="note">首次读取回放通常需要下载视频数据，最终只保存音频。</p>
+    <section aria-live="polite">
+      <p id="audio-summary" class="status">正在准备音频任务…</p>
+      <progress id="audio-progress" max="100" value="0"></progress>
+      <ol id="audio-results"></ol>
+    </section>
+    <div class="actions">
+      <button id="cancel-audio" disabled>取消下载</button>
+      <button id="retry-audio" disabled>重试未完成的课时</button>
+      <button id="audio-report-btn" disabled>下载音频结果报告</button>
+    </div>
+    <p id="report-status" role="status"></p>
+  </main>
+  <script src="core.js"></script>
+  <script src="requests.js"></script>
+  <script src="audio-core.js"></script>
+  <script type="module" src="audio-page.mjs"></script>
+</body>
+</html>

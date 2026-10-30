@@ -53,7 +53,14 @@ def main() -> None:
         "Python 单元测试",
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
     )
-    javascript_files = ["extension/popup.js"]
+    javascript_files = [
+        "extension/popup.js",
+        "extension/requests.js",
+        "extension/audio-core.js",
+        "extension/mp4-audio.mjs",
+        "extension/audio-page.mjs",
+        "extension/audio-download.mjs",
+    ]
     has_extension_core = root.joinpath("extension/core.js").exists()
     if has_extension_core:
         javascript_files.append("extension/core.js")
@@ -80,6 +87,7 @@ def main() -> None:
             "browser.py",
             "config.py",
             "subtitle.py",
+            "audio.py",
             "scripts",
             "tests",
         )

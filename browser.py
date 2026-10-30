@@ -10,6 +10,7 @@ from auth import get_auth_path, save_auth
 from config import (
     CATALOGUE_API_PATH,
     LOGIN_TIMEOUT,
+    SUB_INFO_API_PATH,
     SUBTITLE_API_PATH,
     SUBTITLE_TIMEOUT,
     SiteConfig,
@@ -242,5 +243,49 @@ async def get_course_catalogue(
         return result["body"].get("result", {}).get("data", [])
     except Exception as exc:
         raise RuntimeError(f"课程目录获取失败：{exc}") from exc
+    finally:
+        await page.close()
+
+
+async def get_replay_info(
+    context: BrowserContext, site: SiteConfig, course_id: str, sub_id: str
+) -> dict:
+    """Read replay metadata using the selected site's saved browser session."""
+    course_id = validate_numeric_id(course_id, "course_id")
+    sub_id = validate_numeric_id(sub_id, "sub_id")
+    page = await context.new_page()
+    try:
+        await page.goto(site.origin, wait_until="domcontentloaded")
+        if (urlparse(page.url).hostname or "").lower() != site.hostname:
+            raise RuntimeError(_login_hint(site))
+        result = await page.evaluate(
+            """async ({path, courseId, subId}) => {
+                const url = new URL(path, location.origin);
+                url.searchParams.set("course_id", courseId);
+                url.searchParams.set("sub_id", subId);
+                const response = await fetch(url, {
+                    credentials: "include", signal: AbortSignal.timeout(20000)
+                });
+                const text = await response.text();
+                let body = null;
+                try { body = JSON.parse(text); } catch (error) {}
+                return {status: response.status, body};
+            }""",
+            {"path": SUB_INFO_API_PATH, "courseId": course_id, "subId": sub_id},
+        )
+        status, body = result["status"], result["body"]
+        if status in (401, 403):
+            raise RuntimeError(f"HTTP {status}，{_login_hint(site)}")
+        if not 200 <= status < 300:
+            raise RuntimeError(f"回放信息接口返回 HTTP {status}")
+        if not isinstance(body, dict):
+            raise RuntimeError(f"回放信息接口未返回 JSON，{_login_hint(site)}")
+        if str(body.get("code")) not in ("0", "200"):
+            raise RuntimeError(
+                f"回放信息接口返回错误：code={body.get('code')} msg={body.get('msg')}"
+            )
+        if not isinstance(body.get("data"), dict):
+            raise RuntimeError("回放信息接口缺少 data 对象")
+        return body["data"]
     finally:
         await page.close()

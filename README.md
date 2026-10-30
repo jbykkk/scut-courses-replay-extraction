@@ -2,7 +2,7 @@
 
 ![](./assets/figures/icon.png)
 
-从华南理工大学“百步梯学堂”中提供的课程回放平台“华园视频”提取**课程回放字幕**，支持 JSON、SRT、纯文本三种格式，可批量导出同一课程字幕并打包为ZIP。
+从华南理工大学“百步梯学堂”中提供的课程回放平台“华园视频”提取**课程回放字幕**，支持 JSON、SRT、纯文本三种格式，可批量导出同一课程字幕并打包为ZIP。浏览器插件和命令行均支持下载回放中的音轨，方便为没有平台字幕的课时另行转写。
 
 本项目会根据课程链接自动选择正确入口：
 
@@ -63,6 +63,20 @@ Microsoft Edge 插件安装同理。
 
 课表中的一行代表一次回放，例如“第 3–4 节”包含两节课。回放次数不等于教学节数；有回放也不一定有字幕。
 
+#### 下载回放音频
+
+在扩展管理页重新加载本项目的 `extension/` 目录后，可以使用以下音频入口：
+
+- **当前课时**：点击“下载本次回放音频 (M4A)”。
+- **下载已选课程音频**：在“全部课时”勾选需要的回放，点击按钮批量下载。列表顶部复选框用于全选或全不选；按钮显示已选课时数，没有勾选时禁用。未来课时、直播中和暂无回放的课时不在列表内。
+- 完成一次字幕导出后，如果存在“暂无字幕”的课时，会出现“下载暂无字幕课时的音频”按钮，仅处理这些课时，不包含请求失败的课时。
+
+音频任务会打开独立下载页，并逐节保存到浏览器下载目录中的 `audio_<course_id>/`。可以关闭插件弹窗，请在任务结束前保留下载页；页面显示读取进度和保存结果，支持取消、重试未完成的课时，以及下载包含媒体地址、时长和文件大小的结果报告。已完成的课时不会在同一次任务重试时重复下载；重新创建任务时，浏览器会自动重命名同名文件。
+
+插件内置 MP4Box.js，在浏览器内将回放 AAC 音轨重新封装为真正的 M4A 文件，不重新编码，也不需要安装 ffmpeg。通常仍需读取整段视频数据。当前支持这两个华园视频站点上的普通 MP4/AAC 回放，单个媒体文件上限为 1 GB；HLS、其他音频编码以及更大的文件需另行处理。
+
+字幕导出期间音频入口暂时禁用，避免新标签页关闭弹窗而中断字幕导出。字幕格式选择、ZIP 内容和导出报告继续沿用原有流程。
+
 #### 输出格式
 
 | 格式 | 说明 |
@@ -80,7 +94,7 @@ Microsoft Edge 插件安装同理。
 登录状态可能已过期，请在当前使用的华园视频入口重新登录后重试。校外入口需要重新登录 WebVPN。
 
 **部分课时没有字幕**
-新录制的课程可能尚未生成字幕，或平台没有该课时的语音数据。插件会区分“暂无字幕”和“请求失败”，在列表和结果明细中显示原因；即使全部课时都没有字幕，也可以单独下载结果报告。平台返回“未查询到语音数据”时，本工具无法凭回放视频直接生成字幕。
+新录制的课程可能尚未生成字幕，或平台没有该课时的语音数据。插件会区分“暂无字幕”和“请求失败”，在列表和结果明细中显示原因；即使全部课时都没有字幕，也可以单独下载结果报告。平台返回“未查询到语音数据”时，可以点击插件的音频按钮，或用命令行的 `audio --from-report` 下载回放音频，再交给本地语音识别工具转写。
 
 **批量列表没有显示未来课时**
 这是预期行为：批量下载仅列出已生成回放的课时，避免把未开课、直播中或暂无回放的课时当作字幕导出失败。
@@ -130,7 +144,46 @@ uv run python main.py get --all "https://video.jw.scut.edu.cn/livingroom?course_
 uv run python main.py get --all "https://video-jw-443.webvpn.scut.edu.cn/livingroom?course_id=64762&sub_id=554146&tenant_code=21"
 ```
 
-### 输出
+### 下载回放音频
+
+音频下载复用 CLI 保存的登录态。浏览器插件的登录状态不会自动提供给 CLI，请先执行上面的 `login` 命令。安装系统工具 ffmpeg（同时提供 ffprobe）：
+
+```bash
+# macOS；其他系统使用对应包管理器安装 ffmpeg
+brew install ffmpeg
+
+# 从课程播放链接下载单节课音频，站点由链接自动识别
+uv run python main.py audio "https://video.jw.scut.edu.cn/livingroom?course_id=81478&sub_id=686078&tenant_code=21"
+
+# 按课时 ID 批量下载；未传链接时默认使用校内登录态
+uv run python main.py audio --course-id 81478 --sub-id 686078 686034 686082 686038
+
+# 从插件的导出报告中自动选择 status=no_subtitle 的课时
+uv run python main.py audio --from-report /path/to/字幕导出结果.json
+
+# 校外使用同一份报告时，需要明确选择 WebVPN 登录态
+uv run python main.py audio --from-report /path/to/字幕导出结果.json --site external
+
+# 只探测课时状态、媒体地址和输出路径，不下载或写清单，也不要求安装 ffmpeg
+uv run python main.py audio --course-id 81478 --sub-id 686078 --dry-run
+```
+
+默认输出到 `output/audio/<course_id>/<日期>_<sub_id>.m4a`；课时标题没有日期时使用清理后的标题。每门课的 `媒体地址.json` 记录媒体地址、来源字段、站点、本地路径、时长、文件大小与下载时间。平台提供 AAC 音轨时直接复制，不重新编码。
+
+| 参数 | 说明 |
+|------|------|
+| `--out-dir DIR` | 指定音频根目录，仍按 `course_id` 分目录 |
+| `--include-errors` | 处理报告中 `status=error` 的课时，默认仅处理 `no_subtitle` |
+| `--force` | 重新下载并替换已有文件；失败时保留原文件 |
+| `--stop-on-error` | 首次失败后停止；默认继续处理其他课时 |
+| `--headful` | 显示浏览器窗口，便于排查登录状态 |
+| `--ffmpeg PATH` | 指定 ffmpeg 可执行文件；ffprobe 需位于 PATH |
+
+已有音频通过 ffprobe 校验后会跳过；损坏文件会报错，可用 `--force` 重下。下载先写入临时文件，成功且校验通过后才替换正式文件。批量任务中任何课时失败，命令都会以非零退出码结束。
+
+当前支持平台的普通 MP4 回放，以及可直接读取的媒体地址；需要媒体 Cookie 的回放和 HLS 暂不支持。ffmpeg 通常仍需读取 MP4 中的视频数据，因此网络下载量会大于最终音频大小。本命令只负责获取音频，语音识别需要另行运行。
+
+### 字幕输出
 
 每次抓取生成三个文件：
 
@@ -158,20 +211,31 @@ uv run python main.py get --all "https://video-jw-443.webvpn.scut.edu.cn/livingr
 
 ---
 
+## 音频转写（可选）
+
+下载后的音频可以交给自行选择的语音识别工具处理。macOS 用户可选择 MacParakeet，使用其内置 CLI 批量生成 TXT 或 SRT；操作步骤和模型配置见 [MacParakeet 使用说明](docs/macparakeet.md)，本机实测与其他转写方式的记录见 [转写方法与实验记录](docs/transcription-notes.md)。
+
 ## 项目结构
 
 ```
 ├── main.py              # CLI 入口
 ├── browser.py           # Playwright 浏览器管理与网络拦截
 ├── subtitle.py          # JSON → SRT/TXT 格式转换
+├── audio.py             # 回放媒体选择、音轨提取与媒体清单
 ├── config.py            # URL 与配置常量
 ├── auth.py              # 登录状态管理
 ├── extension/           # Chrome 插件
 │   ├── manifest.json
 │   ├── popup.html
 │   ├── popup.js
+│   ├── requests.js       # 字幕和音频共享的登录态请求与页面内回退
+│   ├── audio.html        # 独立音频下载页
+│   ├── audio-page.mjs
+│   ├── mp4-audio.mjs     # 浏览器内 AAC 音轨提取
+│   ├── vendor/           # 固定版本 MP4Box.js 与许可证
 │   └── jszip.min.js
-├── output/              # 字幕输出（CLI）
+├── output/              # 字幕与音频输出（CLI）
+│   ├── audio/           # 按 course_id 归档音频与媒体清单
 │   ├── json/
 │   ├── srt/
 │   └── txt/
@@ -179,6 +243,8 @@ uv run python main.py get --all "https://video-jw-443.webvpn.scut.edu.cn/livingr
 ```
 
 具体实现详见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+
+贡献流程与检查要求见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ### 插件回归测试
 
@@ -188,11 +254,13 @@ uv run python main.py get --all "https://video-jw-443.webvpn.scut.edu.cn/livingr
 uv run python -m unittest discover -s tests -v
 ```
 
-测试在无头浏览器中使用离线模拟接口，验证课时筛选、字幕缺失与接口错误的区分、ZIP 内容及下载失败后的恢复，无需登录或访问真实课程。
+测试在无头浏览器中使用离线模拟接口，验证课时筛选、字幕缺失与接口错误的区分、ZIP 内容及下载失败后的恢复，无需登录或访问真实课程。音频测试还覆盖两种站点的登录 Cookie、报告筛选、清单更新和批量失败状态；安装 ffmpeg/ffprobe 后会额外运行本地 HTTP MP4 的实际音轨提取测试，未安装时仅跳过该项。
+
+插件测试使用生成的 MP4 样本验证 M4A 提取、下载完成/中断、取消和部分失败重试，并回归单课字幕三种格式与批量 ZIP。样本不包含真实课程内容。
 
 ## 已知限制
 
-- **CLI 需要有头浏览器** — headless 模式下播放器不会触发字幕 API 请求
+- **字幕 CLI 需要有头浏览器** — headless 模式下播放器不会触发字幕 API 请求；`audio` 直接请求课时信息，默认使用无头浏览器
 - **登录状态会过期** — Cookie 失效后需重新扫码登录对应站点
 
 ## 权限说明

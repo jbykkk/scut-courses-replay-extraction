@@ -63,6 +63,9 @@
     }
     .btn:hover { background: #1557b0; }
     .btn:disabled { background: #ccc; cursor: not-allowed; }
+    .btn.secondary { margin-top: 10px; background: white; border: 1px solid #b9cce7; color: #1a63bd; }
+    .btn.secondary:disabled { color: #999; border-color: #ddd; }
+    .audio-note { margin: 8px 0 0; }
 
     .lesson-list {
       max-height: 240px;
@@ -134,7 +137,7 @@
 
   <div id="main" class="hidden">
     <div class="header">
-      <h1>SCUT 课程字幕下载</h1>
+      <h1>SCUT 课程下载</h1>
       <div class="subtitle" id="course-subtitle"></div>
     </div>
 
@@ -171,6 +174,8 @@
         </div>
         <button class="btn" id="download-btn">下载字幕</button>
         <div id="status-single" class="status hidden"></div>
+        <button class="btn secondary" id="audio-download-btn" disabled>下载本次回放音频 (M4A)</button>
+        <p class="note audio-note">音频将在独立下载页提取，不需要平台字幕。</p>
       </div>
     </div>
 
@@ -200,12 +205,16 @@
           <pre id="batch-details-text"></pre>
         </details>
         <button id="report-download-btn" class="report-btn hidden">下载导出结果报告</button>
+        <button class="btn secondary" id="batch-audio-btn" disabled>下载已选课程音频（0 次）</button>
+        <button class="btn secondary hidden" id="missing-audio-btn">下载暂无字幕课时的音频</button>
+        <p class="note audio-note">音频在独立下载页逐节保存为 M4A。</p>
       </div>
     </div>
   </div>
 
   <script src="jszip.min.js"></script>
   <script src="core.js"></script>
+  <script src="requests.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

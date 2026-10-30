@@ -1,0 +1,22 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: #f5f7fb; color: #253348; font: 15px/1.6 -apple-system, "PingFang SC", sans-serif; }
+main { max-width: 820px; margin: 52px auto; padding: 32px; background: white; border: 1px solid #e1e7ef; border-radius: 16px; }
+.eyebrow { color: #2866be; margin: 0; font-size: 13px; }
+h1 { margin: 4px 0 20px; font-size: 28px; }
+.note { color: #617087; font-size: 13px; margin: 8px 0; }
+.status { padding: 12px 16px; border-radius: 8px; background: #eaf2ff; }
+.status.success { background: #e8f5e9; color: #256a36; }
+.status.error { background: #fbe9e7; color: #b12828; }
+.status.warning { background: #fff3e0; color: #8a4b00; }
+progress { width: 100%; height: 8px; accent-color: #1a73e8; }
+ol { padding: 0; list-style: none; }
+li { border: 1px solid #e1e7ef; border-radius: 8px; margin: 10px 0; padding: 14px 16px; }
+.lesson-label { font-weight: 600; }
+.audio-state { display: block; color: #617087; font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+li[data-state="downloaded"] .audio-state { color: #256a36; }
+li[data-state="error"] .audio-state { color: #b12828; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+button { padding: 9px 14px; font: inherit; color: #1a63bd; background: white; border: 1px solid #b9cce7; border-radius: 6px; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+#report-status { font-size: 13px; color: #617087; }
+@media (max-width: 860px) { main { margin: 16px; padding: 20px; } }

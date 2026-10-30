@@ -239,7 +239,7 @@ class ManifestTests(unittest.TestCase):
         manifest_path = Path(__file__).parents[1] / "extension" / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest["manifest_version"], 3)
-        self.assertEqual(manifest["version"], "0.2.0")
+        self.assertEqual(manifest["version"], "0.3.0")
         self.assertNotIn("<all_urls>", manifest.get("host_permissions", []))
         self.assertIn("scripting", manifest["permissions"])
         self.assertEqual(
