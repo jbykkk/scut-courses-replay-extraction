@@ -55,6 +55,7 @@ SITE_BY_HOSTNAME = {site.hostname: site for site in SITES.values()}
 
 SUBTITLE_API_PATH = "/courseapi/v3/web-socket/search-trans-result"
 CATALOGUE_API_PATH = "/courseapi/v2/course/catalogue"
+SUB_INFO_API_PATH = "/courseapi/v3/portal-home-setting/get-sub-info"
 
 LOGIN_TIMEOUT = 120_000
 SUBTITLE_TIMEOUT = 60_000

@@ -67,3 +67,55 @@ test("filename and ZIP entry components are sanitized again", () => {
   assert.equal(cleaned.includes(":"), false);
   assert.equal(cleaned.includes("\u0000"), false);
 });
+
+const { parseTask, mediaFromInfo, audioFilename } = require("./audio-core.js");
+
+test("audio tasks validate origin, IDs and duplicate parameters", () => {
+  const query = `?origin=${encodeURIComponent(EXTERNAL)}&course_id=42&sub_ids=1,1,2&tab_id=7`;
+  assert.deepEqual(parseTask(query).subIds, ["1", "2"]);
+  assert.throws(() => parseTask(query + "&course_id=43"));
+  assert.throws(() => parseTask(query.replace("sub_ids=1,1,2", "sub_ids=../1")));
+  assert.throws(() => parseTask(query.replace(encodeURIComponent(EXTERNAL), "https://example.com")));
+  assert.equal(audioFilename("42", "1", "2026-10-16第3-4节"), "audio_42/2026-10-16_1.m4a");
+  assert.equal(audioFilename("42", "1", "../../evil").split("/").length, 2);
+});
+
+test("audio media preference matches CLI and WebVPN rewrites internal URLs", () => {
+  const media = `${INTERNAL}/recording.mp4`;
+  const data = { content: { save_playback: { contents: media } }, video_list: [
+    { type: 4, preview_url: `${media}?student` }, { type: 3, preview_url: `${media}?teacher` }
+  ] };
+  assert.equal(mediaFromInfo(data, INTERNAL).field, "content.save_playback.contents");
+  assert.equal(new URL(mediaFromInfo(data, EXTERNAL).url).origin, EXTERNAL);
+  delete data.content;
+  assert.equal(mediaFromInfo(data, INTERNAL).url, media + "?teacher");
+  assert.throws(() => mediaFromInfo({ playurl: { hd: "file:///tmp/a.mp4" } }, INTERNAL));
+  assert.throws(() => mediaFromInfo({ is_m3u8: "yes", playurl: { hd: media } }, INTERNAL), /HLS/);
+});
+
+test("browser MP4 extraction keeps only AAC and rejects truncated input", async () => {
+  const { createAudioExtractor } = await import("./mp4-audio.mjs");
+  const { createFile } = await import("./vendor/mp4box.all.mjs");
+  const bytes = fs.readFileSync(path.join(fixtures, "replay-aac.mp4"));
+  const extractor = createAudioExtractor();
+  for (let offset = 0; offset < bytes.length; offset += 129) {
+    extractor.append(bytes.subarray(offset, offset + 129), offset);
+  }
+  const { blob, duration } = extractor.finish();
+  assert.ok(duration > 2 && duration < 2.1);
+  const output = createFile(true);
+  let tracks;
+  output.onReady = (info) => { tracks = info.tracks; };
+  const buffer = await blob.arrayBuffer();
+  assert.equal(new TextDecoder().decode(buffer.slice(8, 12)), "M4A ");
+  buffer.fileStart = 0;
+  output.appendBuffer(buffer);
+  assert.equal(tracks.length, 1);
+  assert.ok(tracks[0].audio);
+  assert.equal(tracks[0].video, undefined);
+  extractor.dispose();
+  const truncated = createAudioExtractor();
+  truncated.append(bytes.subarray(0, 100), 0);
+  assert.throws(() => truncated.finish(), /完整 MP4/);
+  truncated.dispose();
+});
