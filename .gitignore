@@ -15,8 +15,10 @@ data/
 # Output subtitles
 output/
 
-# Local review notes
-docs/
+# Local review notes; public transcription guides are versioned
+docs/*
+!docs/macparakeet.md
+!docs/transcription-notes.md
 
 # For Code Review
 .pr-review/

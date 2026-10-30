@@ -211,6 +211,10 @@ uv run python main.py audio --course-id 81478 --sub-id 686078 --dry-run
 
 ---
 
+## 音频转写（可选）
+
+下载后的音频可以交给自行选择的语音识别工具处理。macOS 用户可选择 MacParakeet，使用其内置 CLI 批量生成 TXT 或 SRT；操作步骤和模型配置见 [MacParakeet 使用说明](docs/macparakeet.md)，本机实测与其他转写方式的记录见 [转写方法与实验记录](docs/transcription-notes.md)。
+
 ## 项目结构
 
 ```
@@ -239,6 +243,8 @@ uv run python main.py audio --course-id 81478 --sub-id 686078 --dry-run
 ```
 
 具体实现详见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+
+贡献流程与检查要求见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ### 插件回归测试
 
