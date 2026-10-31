@@ -1,6 +1,7 @@
 """Offline popup regression tests. Run: uv run python -m unittest discover -s tests -v."""
 
 import base64
+from collections import Counter
 import io
 import json
 from pathlib import Path
@@ -55,6 +56,8 @@ class ExtensionBrowserCase(unittest.TestCase):
         self.range_media = False
         self.malformed_range = False
         self.media_requests = []
+        self.media_request_paths = []
+        self.media_modes = {}
         self.page.add_init_script("""(() => {
             window.downloads = [];
             window.openedTabs = [];
@@ -144,9 +147,12 @@ class ExtensionBrowserCase(unittest.TestCase):
         elif url.path.startswith('/media/'):
             range_header = route.request.headers.get('range')
             self.media_requests.append(range_header)
-            if self.media_error:
+            self.media_request_paths.append(url.path)
+            mode = self.media_modes.get(url.path)
+            supports_range = mode == 'range' or (mode is None and self.range_media)
+            if self.media_error or mode == 'error':
                 route.fulfill(status=503, body='unavailable')
-            elif self.range_media and range_header:
+            elif supports_range and range_header:
                 data = (Path(__file__).parent / 'fixtures/replay-aac.mp4').read_bytes()
                 ranges = []
                 for item in range_header.removeprefix('bytes=').split(','):
@@ -542,6 +548,50 @@ class AudioPageTests(ExtensionBrowserCase):
         self.wait_complete()
         folder = self.page.evaluate('window.downloads[0].filename').split('/')[0]
         self.assertRegex(folder, r'^audio_数字系统设计_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$')
+
+    def test_mixed_batch_retry_preserves_completed_files_methods_and_folder(self):
+        self.page.clock.set_fixed_time(1793427600000)
+        paths = [f'/media/replay-{sid}.mp4' for sid in ('1', '2', '3')]
+        for sid, path in zip(('1', '2', '3'), paths):
+            self.media[sid] = self.audio_info()
+            self.media[sid]['data']['content']['save_playback']['contents'] = f'{ORIGIN}{path}'
+        self.media_modes = dict(zip(paths, ('range', 'full', 'error')))
+        self.open_audio('1,2,3', course_title='测试课程')
+        self.wait_complete(2)
+        expect(self.page.locator('#audio-summary')).to_contain_text('1 次失败')
+        self.assertEqual(self.page.evaluate('window.downloads.length'), 2)
+        self.page.locator('#audio-report-btn').click()
+        self.page.wait_for_function('window.downloads.length === 3')
+        first_report = json.loads(base64.b64decode(self.page.evaluate('window.downloads[2].base64')))
+        self.assertEqual([item['status'] for item in first_report['results']], ['downloaded', 'downloaded', 'error'])
+        self.assertEqual([item['download_method'] for item in first_report['items']], ['ranges', 'full'])
+        self.assertEqual([item['media_requests'] for item in first_report['items']], [1, 2])
+        self.assertNotIn('fallback_reason', first_report['items'][0])
+        self.assertIn('fallback_reason', first_report['items'][1])
+        folder = first_report['items'][0]['audio_file'].split('/')[0]
+        self.assertTrue(folder.startswith('audio_测试课程_'))
+
+        before = Counter(self.media_request_paths)
+        self.page.clock.set_fixed_time(1793514000000)
+        self.media_modes[paths[2]] = 'range'
+        self.page.locator('#retry-audio').click()
+        self.wait_complete(3)
+        expect(self.page.locator('#retry-audio')).to_be_disabled()
+        self.assertEqual(self.page.evaluate('window.downloads.length'), 4)
+        after = Counter(self.media_request_paths)
+        self.assertEqual([after[path] for path in paths], [before[paths[0]], before[paths[1]], before[paths[2]] + 1])
+        self.page.locator('#audio-report-btn').click()
+        self.page.wait_for_function('window.downloads.length === 5')
+        final_report = json.loads(base64.b64decode(self.page.evaluate('window.downloads[4].base64')))
+        self.assertEqual([item['status'] for item in final_report['results']], ['downloaded'] * 3)
+        self.assertEqual([item['download_method'] for item in final_report['items']], ['ranges', 'full', 'ranges'])
+        self.assertEqual(final_report['items'][:2], first_report['items'])
+        self.assertTrue(all(item['audio_file'].split('/')[0] == folder for item in final_report['items']))
+        files = self.page.evaluate('window.downloads')
+        self.assertTrue(all(item['filename'].split('/')[0] == folder for item in files))
+        self.assertEqual([item['filename'] for item in files if item['filename'].endswith('.m4a')],
+                         [item['audio_file'] for item in final_report['items']])
+        self.assertEqual(self.page.evaluate('window.downloadListeners.size'), 0)
 
     def test_selective_download_works_in_browser_and_records_transfer_method(self):
         self.range_media = True

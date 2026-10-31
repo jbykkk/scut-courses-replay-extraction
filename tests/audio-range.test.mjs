@@ -7,6 +7,7 @@ import { createRangeReader, parseMultipart, planAudioRanges, inspectAudio, downl
 import { extractAudio } from "../extension/mp4-audio.mjs";
 
 const fixture = await readFile(new URL("./fixtures/replay-aac.mp4", import.meta.url));
+const interleavedFixture = await readFile(new URL("./fixtures/replay-interleaved-aac.mp4", import.meta.url));
 
 function multipart(ranges, data, boundary = "range-boundary") {
   return Buffer.concat([
@@ -19,6 +20,9 @@ function multipart(ranges, data, boundary = "range-boundary") {
 
 async function server(t, mode = "normal", data = fixture) {
   const requests = [];
+  const pendingResponses = new Set();
+  const pendingStarted = Promise.withResolvers();
+  const pendingStopped = Promise.withResolvers();
   let wireBytes = 0;
   const server = createServer((req, res) => {
     if (!req.headers.range) {
@@ -55,6 +59,17 @@ async function server(t, mode = "normal", data = fixture) {
       res.flushHeaders();
       return;
     }
+    if (mode === "paused-multi" && ranges.length > 1) {
+      pendingResponses.add(res);
+      res.on("close", () => {
+        pendingResponses.delete(res);
+        if (!pendingResponses.size) pendingStopped.resolve();
+      });
+      res.writeHead(206, { "Content-Type": "multipart/byteranges; boundary=pending" });
+      res.flushHeaders();
+      if (pendingResponses.size === 4) pendingStarted.resolve();
+      return;
+    }
     let body;
     if (ranges.length > 1) {
       body = multipart(mode === "missing" ? ranges.slice(1) : ranges, data);
@@ -73,7 +88,12 @@ async function server(t, mode = "normal", data = fixture) {
     server.closeAllConnections();
     return new Promise(resolve => server.close(resolve));
   });
-  return { url: `http://127.0.0.1:${server.address().port}/recording.mp4`, requests, get wireBytes() { return wireBytes; } };
+  return {
+    url: `http://127.0.0.1:${server.address().port}/recording.mp4`, requests,
+    pendingStarted: pendingStarted.promise, pendingStopped: pendingStopped.promise,
+    get pendingCount() { return pendingResponses.size; },
+    get wireBytes() { return wireBytes; },
+  };
 }
 
 function audioPackets(bytes) {
@@ -164,12 +184,11 @@ test("oversized responses and cancellation stop network reads", async t => {
   await assert.rejects(result, /abort/i);
 });
 
-function padMediaData(data) {
+function padMediaData(data, padding = 80 * 1024) {
   const file = createFile(true);
   const buffer = Uint8Array.from(data).buffer;
   buffer.fileStart = 0;
   file.appendBuffer(buffer);
-  const padding = 80 * 1024;
   const changed = Buffer.from(data);
   const mdat = file.mdats[0];
   changed.writeUInt32BE(mdat.size + padding, mdat.start);
@@ -179,6 +198,45 @@ function padMediaData(data) {
   }
   const insert = mdat.start + mdat.hdr_size;
   return Buffer.concat([changed.subarray(0, insert), Buffer.alloc(padding), changed.subarray(insert)]);
+}
+
+function moveMoovToFront(data) {
+  const file = createFile(true);
+  const buffer = Uint8Array.from(data).buffer;
+  buffer.fileStart = 0;
+  file.appendBuffer(buffer);
+  const moov = file.moov;
+  const insert = file.ftyp.start + file.ftyp.size;
+  assert.ok(moov.start > file.mdats[0].start, "source fixture must have trailing metadata");
+  const metadata = Buffer.from(data.subarray(moov.start, moov.start + moov.size));
+  for (const track of moov.traks) {
+    const table = track.mdia.minf.stbl.stco;
+    for (const [index, offset] of table.chunk_offsets.entries()) {
+      assert.ok(offset >= insert && offset < moov.start);
+      metadata.writeUInt32BE(offset + moov.size, table.start - moov.start + 16 + 4 * index);
+    }
+  }
+  return Buffer.concat([
+    data.subarray(0, insert), metadata, data.subarray(insert, moov.start), data.subarray(moov.start + moov.size),
+  ]);
+}
+
+for (const layout of ["trailing", "leading"]) {
+  test(`selective downloads skip bulk media with ${layout} metadata`, async t => {
+    const padded = padMediaData(fixture, 2 * 1024 * 1024);
+    const data = layout === "leading" ? moveMoovToFront(padded) : padded;
+    const media = await server(t, "normal", data);
+    const result = await extractAudio(media.url);
+    assert.equal(result.method, "ranges");
+    assert.ok(media.requests.some(ranges => ranges.length > 1));
+    assert.ok(media.requests.every(ranges => ranges.length), "must not use full-download fallback");
+    assert.equal(result.transferredBytes, media.wireBytes);
+    assert.equal(result.mediaBytes, data.length);
+    assert.ok(media.wireBytes < data.length / 4, "response bodies must stay below 25% of this padded fixture");
+    const actual = audioPackets(new Uint8Array(await result.blob.arrayBuffer()));
+    assert.equal(actual.info.videoTracks.length, 0);
+    assert.deepEqual(actual.bytes, audioPackets(fixture).bytes);
+  });
 }
 
 test("plugin prefers selective extraction and reports actual transfer statistics", async t => {
@@ -225,4 +283,20 @@ test("cancelling selective plugin reads never starts the full-download fallback"
   setTimeout(() => controller.abort(), 30);
   await assert.rejects(result, /abort/i);
   assert.ok(media.requests.every(ranges => ranges.length));
+});
+
+test("cancelling an active concurrent batch closes all requests without full fallback", { timeout: 5000 }, async t => {
+  const data = padMediaData(interleavedFixture);
+  const media = await server(t, "paused-multi", data);
+  const controller = new AbortController();
+  const result = extractAudio(media.url, { signal: controller.signal });
+  const rejected = assert.rejects(result, /abort/i);
+  await media.pendingStarted;
+  assert.equal(media.pendingCount, 4);
+  controller.abort();
+  await rejected;
+  await media.pendingStopped;
+  assert.equal(media.pendingCount, 0);
+  assert.equal(media.requests.filter(ranges => ranges.length > 1).length, 4);
+  assert.ok(media.requests.every(ranges => ranges.length), "cancellation must not start a full download");
 });
