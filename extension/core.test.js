@@ -68,7 +68,7 @@ test("filename and ZIP entry components are sanitized again", () => {
   assert.equal(cleaned.includes("\u0000"), false);
 });
 
-const { parseTask, mediaFromInfo, audioFilename } = require("./audio-core.js");
+const { parseTask, mediaFromInfo, audioFolder, audioFilename } = require("./audio-core.js");
 
 test("audio tasks validate origin, IDs and duplicate parameters", () => {
   const query = `?origin=${encodeURIComponent(EXTERNAL)}&course_id=42&sub_ids=1,1,2&tab_id=7`;
@@ -76,8 +76,21 @@ test("audio tasks validate origin, IDs and duplicate parameters", () => {
   assert.throws(() => parseTask(query + "&course_id=43"));
   assert.throws(() => parseTask(query.replace("sub_ids=1,1,2", "sub_ids=../1")));
   assert.throws(() => parseTask(query.replace(encodeURIComponent(EXTERNAL), "https://example.com")));
-  assert.equal(audioFilename("42", "1", "2026-10-16第3-4节"), "audio_42/2026-10-16_1.m4a");
-  assert.equal(audioFilename("42", "1", "../../evil").split("/").length, 2);
+  assert.equal(parseTask(query).courseTitle, null);
+  assert.equal(parseTask(query + "&course_title=" + encodeURIComponent(" 数字系统设计 ")).courseTitle, "数字系统设计");
+  assert.throws(() => parseTask(query + "&course_title=A&course_title=B"));
+});
+
+test("audio task folders use course name and local start time with safe paths", () => {
+  const startedAt = new Date(2026, 9, 31, 8, 9, 3);
+  const folder = audioFolder("42", " 数字系统设计 ", startedAt);
+  assert.equal(folder, "audio_数字系统设计_2026-10-31_08-09-03");
+  assert.equal(audioFolder("42", null, startedAt), "audio_42_2026-10-31_08-09-03");
+  assert.equal(audioFolder("42", " ", startedAt), "audio_42_2026-10-31_08-09-03");
+  const unsafe = audioFolder("42", "../../evil:\\name\u0000", startedAt);
+  assert.equal(/[\/\\:\u0000]/.test(unsafe), false);
+  assert.equal(audioFilename(folder, "1", "2026-10-16第3-4节"), `${folder}/2026-10-16_1.m4a`);
+  assert.equal(audioFilename(folder, "2", "../../evil").split("/").length, 2);
 });
 
 test("audio media preference matches CLI and WebVPN rewrites internal URLs", () => {

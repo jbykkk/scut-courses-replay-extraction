@@ -48,10 +48,10 @@
     .info-label { color: #666; }
     .info-value { color: #333; font-weight: 500; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    .formats { margin-bottom: 16px; }
+    .formats { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 16px; }
     .formats label {
       display: flex; align-items: center; gap: 8px;
-      padding: 6px 0; cursor: pointer; font-size: 13px;
+      padding: 6px 0; cursor: pointer; font-size: 13px; white-space: nowrap;
     }
     .formats input[type="checkbox"] { width: 16px; height: 16px; accent-color: #1a73e8; }
 
@@ -168,9 +168,9 @@
           </div>
         </div>
         <div class="formats">
-          <label><input type="checkbox" id="fmt-srt" checked> SRT（字幕文件）</label>
-          <label><input type="checkbox" id="fmt-txt" checked> TXT（纯文本）</label>
-          <label><input type="checkbox" id="fmt-json"> JSON（字幕数组）</label>
+          <label><input type="checkbox" id="fmt-srt"> .srt</label>
+          <label><input type="checkbox" id="fmt-txt" checked> .txt</label>
+          <label><input type="checkbox" id="fmt-json"> .json</label>
         </div>
         <button class="btn" id="download-btn">下载字幕</button>
         <div id="status-single" class="status hidden"></div>
@@ -190,9 +190,9 @@
           </div>
         </div>
         <div class="formats">
-          <label><input type="checkbox" id="batch-fmt-srt" checked> SRT</label>
-          <label><input type="checkbox" id="batch-fmt-txt" checked> TXT</label>
-          <label><input type="checkbox" id="batch-fmt-json"> JSON</label>
+          <label><input type="checkbox" id="batch-fmt-srt"> .srt</label>
+          <label><input type="checkbox" id="batch-fmt-txt" checked> .txt</label>
+          <label><input type="checkbox" id="batch-fmt-json"> .json</label>
         </div>
         <div class="progress-bar hidden" id="batch-progress-bar">
           <div class="progress-bar-fill" id="batch-progress-fill"></div>

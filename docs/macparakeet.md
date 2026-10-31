@@ -8,7 +8,7 @@
 
 先使用本项目的浏览器插件或 `audio` 命令下载音频。默认位置：
 
-- 浏览器插件：浏览器下载目录下的 `audio_<course_id>/`。
+- 浏览器插件：浏览器下载目录下的 `audio_<课程名称>_<下载时间>/`，时间格式为 `YYYY-MM-DD_HH-mm-ss`。
 - 命令行：项目下的 `output/audio/<course_id>/`。
 
 下文命令从本项目根目录执行，使用示例课程 ID `12345`；请替换为自己的课程和实际文件名。
@@ -93,7 +93,7 @@ CLI="/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli"
   --format transcript --mode raw \
   --speaker-detection off --no-history \
   --output-dir "./output/transcripts/12345" \
-  "$HOME/Downloads/audio_12345"
+  "$HOME/Downloads/audio_数字系统设计_2026-10-31_15-30-00"
 ```
 
 只处理部分文件时，将最后的目录参数替换为需要的文件路径，例如：

@@ -124,6 +124,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         origin: parsed.origin, course_id: courseId,
         sub_ids: subIds.join(","), tab_id: String(tab.id),
       });
+      if (courseTitle) query.set("course_title", courseTitle);
       await chrome.tabs.create({ url: `${chrome.runtime.getURL("audio.html")}?${query}` });
     } catch (error) {
       showStatus(statusId, `无法打开音频下载：${error.message}`, "error");
@@ -154,9 +155,19 @@ document.addEventListener("DOMContentLoaded", async () => {
       safeRequest(api.courseTitle(courseId)),
     ]);
     const info = infoBody?.data || null;
-    const title = titleBody?.data?.[0]?.course_title || null;
-    courseTitle = title;
-    if (title) document.getElementById("course-name").textContent = title;
+    const title = [
+      info?.course_title,
+      titleBody?.data?.course_title,
+      titleBody?.data?.[0]?.course_title,
+      titleBody?.result?.data?.course_title,
+      titleBody?.result?.data?.[0]?.course_title,
+    ].find((value) => typeof value === "string" && value.trim());
+    courseTitle = title?.trim() || null;
+    if (courseTitle) {
+      const nameEl = document.getElementById("course-name");
+      nameEl.textContent = courseTitle;
+      nameEl.title = courseTitle;
+    }
     if (info) {
       document.getElementById("lecturer-name").textContent = info.lecturer_name || "-";
       document.getElementById("sub-title").textContent = info.sub_title || "-";

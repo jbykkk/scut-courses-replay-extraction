@@ -12,6 +12,7 @@
     for (const key of ["origin", "course_id", "sub_ids", "tab_id"]) {
       if (params.getAll(key).length !== 1) throw new Error(`音频任务缺少或重复参数：${key}`);
     }
+    if (params.getAll("course_title").length > 1) throw new Error("音频任务重复参数：course_title");
     const origin = params.get("origin");
     createApi(origin);
     const courseId = normalizeNumericId(params.get("course_id"), "course_id");
@@ -19,7 +20,8 @@
     if (subIds.length > 500) throw new Error("每次最多下载 500 次回放");
     const tabId = Number(params.get("tab_id"));
     if (!Number.isSafeInteger(tabId) || tabId < 0) throw new Error("课程标签页参数无效");
-    return { origin, courseId, subIds, tabId };
+    const courseTitle = params.get("course_title")?.trim() || null;
+    return { origin, courseId, courseTitle, subIds, tabId };
   }
 
   function mediaFromInfo(data, origin) {
@@ -50,13 +52,21 @@
     throw new Error("未找到受支持的回放媒体地址");
   }
 
-  function audioFilename(courseId, subId, title) {
+  function audioFolder(courseId, courseTitle, startedAt) {
     courseId = normalizeNumericId(courseId, "course_id");
+    const name = typeof courseTitle === "string" && courseTitle.trim() ? courseTitle.trim() : courseId;
+    const pad = (value) => String(value).padStart(2, "0");
+    const date = `${startedAt.getFullYear()}-${pad(startedAt.getMonth() + 1)}-${pad(startedAt.getDate())}`;
+    const time = `${pad(startedAt.getHours())}-${pad(startedAt.getMinutes())}-${pad(startedAt.getSeconds())}`;
+    return `audio_${sanitizeFilename(name).slice(0, 64)}_${date}_${time}`;
+  }
+
+  function audioFilename(folder, subId, title) {
     subId = normalizeNumericId(subId, "sub_id");
     const date = typeof title === "string" && title.match(/^\d{4}-\d{2}-\d{2}/);
     const label = date ? date[0] : title ? sanitizeFilename(title).slice(0, 48) : "";
-    return `audio_${courseId}/${label ? `${label}_` : ""}${subId}.m4a`;
+    return `${sanitizeFilename(folder)}/${label ? `${label}_` : ""}${subId}.m4a`;
   }
 
-  return { parseTask, mediaFromInfo, audioFilename };
+  return { parseTask, mediaFromInfo, audioFolder, audioFilename };
 });
