@@ -40,6 +40,8 @@ uv run python main.py get --all "https://video-jw-443.webvpn.scut.edu.cn/livingr
 
 ## 下载回放音频
 
+插件端的音频下载流程和格式限制见 [回放音频下载](audio-download.md)；本节只介绍 CLI。
+
 音频下载复用 CLI 保存的登录态。浏览器插件的登录状态不会自动提供给 CLI，请先执行上面的 `login` 命令。安装系统工具 ffmpeg（同时提供 ffprobe）：
 
 ```bash
@@ -154,6 +156,6 @@ uv run python scripts/check.py
 
 ## 下载后的音频转写
 
-下载与转写分别执行。MacParakeet 的批量 TXT/SRT 操作见 [MacParakeet 使用说明](macparakeet.md)，其他转写方式的本机记录见 [转写方法与实验记录](transcription-notes.md)。
+下载与转写分别执行。本地 Whisper 的批量 TXT/SRT 操作见 [macOS 本地 Whisper 转写](macparakeet.md)。
 
 选择下载的 Node.js 探测入口、读取量对比和参数见 [音频选择下载探索](audio-download-exploration.md)；该脚本与插件共享 Range 模块，Python `audio` 命令仍使用 ffmpeg。
