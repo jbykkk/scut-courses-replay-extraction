@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createFile } from "../extension/vendor/mp4box.all.mjs";
 import { createRangeReader, parseMultipart, planAudioRanges, inspectAudio, downloadIndexedAudio } from "../scripts/audio-range.mjs";
+import { extractAudio } from "../extension/mp4-audio.mjs";
 
 const fixture = await readFile(new URL("./fixtures/replay-aac.mp4", import.meta.url));
 
@@ -20,11 +21,24 @@ async function server(t, mode = "normal", data = fixture) {
   const requests = [];
   let wireBytes = 0;
   const server = createServer((req, res) => {
+    if (!req.headers.range) {
+      requests.push([]);
+      wireBytes += data.length;
+      res.writeHead(200, { "Content-Length": data.length });
+      res.end(data);
+      return;
+    }
     const ranges = req.headers.range.replace("bytes=", "").split(",").map(value => {
       const [start, last] = value.split("-").map(Number);
       return { start, end: Math.min(last + 1, data.length) };
     });
     requests.push(ranges);
+    if (mode === "denied") { res.writeHead(403); res.end(); return; }
+    if (mode === "oversized") {
+      res.writeHead(206, { "Content-Range": "bytes 0-31/1073741825" });
+      res.end(data.subarray(0, 32));
+      return;
+    }
     res.setHeader("ETag", mode === "changed" && requests.length > 1 ? '"new"' : '"stable"');
     if (mode === "ignored" || (mode === "ignored-multi" && ranges.length > 1)) {
       res.writeHead(200, { "Content-Length": data.length });
@@ -75,7 +89,7 @@ function audioPackets(bytes) {
 test("multipart parser preserves binary data and validates declared lengths", () => {
   const data = Buffer.from("\0\r\n--range-boundary\r\n\xffdata", "latin1");
   const body = multipart([{ start: 0, end: data.length }], data);
-  assert.deepEqual(parseMultipart(body, "range-boundary")[0].data, data);
+  assert.deepEqual(Buffer.from(parseMultipart(body, "range-boundary")[0].data), data);
   assert.throws(() => parseMultipart(body.subarray(0, body.length - 10), "range-boundary"), /multipart/);
   assert.throws(() => parseMultipart(body, "missing"), /boundary/);
 });
@@ -148,4 +162,67 @@ test("oversized responses and cancellation stop network reads", async t => {
   const result = createRangeReader(paused.url, { signal: controller.signal }).read([{ start: 0, end: 256 }]);
   setTimeout(() => controller.abort(), 30);
   await assert.rejects(result, /abort/i);
+});
+
+function padMediaData(data) {
+  const file = createFile(true);
+  const buffer = Uint8Array.from(data).buffer;
+  buffer.fileStart = 0;
+  file.appendBuffer(buffer);
+  const padding = 80 * 1024;
+  const changed = Buffer.from(data);
+  const mdat = file.mdats[0];
+  changed.writeUInt32BE(mdat.size + padding, mdat.start);
+  for (const track of file.moov.traks) {
+    const table = track.mdia.minf.stbl.stco;
+    table.chunk_offsets.forEach((offset, index) => changed.writeUInt32BE(offset + padding, table.start + 16 + 4 * index));
+  }
+  const insert = mdat.start + mdat.hdr_size;
+  return Buffer.concat([changed.subarray(0, insert), Buffer.alloc(padding), changed.subarray(insert)]);
+}
+
+test("plugin prefers selective extraction and reports actual transfer statistics", async t => {
+  const media = await server(t);
+  const result = await extractAudio(media.url);
+  assert.equal(result.method, "ranges");
+  assert.equal(result.transferredBytes, media.wireBytes);
+  assert.deepEqual(audioPackets(new Uint8Array(await result.blob.arrayBuffer())).bytes, audioPackets(fixture).bytes);
+});
+
+test("plugin falls back once when multipart is unsupported after a successful index", async t => {
+  const data = padMediaData(fixture);
+  const media = await server(t, "ignored-multi", data);
+  const result = await extractAudio(media.url);
+  assert.equal(result.method, "full");
+  assert.match(result.fallbackReason, /HTTP 200/);
+  assert.ok(media.requests.some(ranges => ranges.length > 1));
+  assert.equal(media.requests.filter(ranges => !ranges.length).length, 1);
+  assert.ok(result.transferredBytes > data.length);
+  assert.deepEqual(audioPackets(new Uint8Array(await result.blob.arrayBuffer())).bytes, audioPackets(fixture).bytes);
+});
+
+test("plugin preserves the original download when even the first Range is ignored", async t => {
+  const media = await server(t, "ignored");
+  const result = await extractAudio(media.url);
+  assert.equal(result.method, "full");
+  assert.equal(result.transferredBytes, fixture.length);
+  assert.equal(media.requests.filter(ranges => !ranges.length).length, 1);
+});
+
+test("plugin does not retry authentication failures or bypass the media limit", async t => {
+  const denied = await server(t, "denied");
+  await assert.rejects(extractAudio(denied.url), /HTTP 403/);
+  assert.equal(denied.requests.length, 1);
+  const oversized = await server(t, "oversized");
+  await assert.rejects(extractAudio(oversized.url), /超过 1 GB/);
+  assert.equal(oversized.requests.length, 1);
+});
+
+test("cancelling selective plugin reads never starts the full-download fallback", async t => {
+  const media = await server(t, "paused");
+  const controller = new AbortController();
+  const result = extractAudio(media.url, { signal: controller.signal });
+  setTimeout(() => controller.abort(), 30);
+  await assert.rejects(result, /abort/i);
+  assert.ok(media.requests.every(ranges => ranges.length));
 });

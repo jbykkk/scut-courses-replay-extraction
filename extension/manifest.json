@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SCUT 字幕下载",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "从华园视频课程回放中下载字幕（SRT/TXT/JSON）和音频（M4A）",
   "permissions": ["activeTab", "downloads", "scripting"],
   "host_permissions": [

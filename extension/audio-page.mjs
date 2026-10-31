@@ -60,15 +60,19 @@ async function run(ids) {
         result.media_url = media.url;
         result.source_field = media.field;
         setRow(id, "loading", "正在读取回放并提取音轨…", result.title);
-        const { blob, duration, codec } = await extractAudio(media.url, {
+        const audio = await extractAudio(media.url, {
           signal,
-          onProgress(received, total) {
+          onProgress(received, total, details) {
             const amount = (received / 1024 / 1024).toFixed(1);
-            if (total) progress.value = Math.round(received * 100 / total);
+            if (details.progress != null) progress.value = Math.min(100, Math.round(details.progress * 100));
             else progress.removeAttribute("value");
-            setRow(id, "loading", `已读取 ${amount} MB${total ? ` / ${(total / 1024 / 1024).toFixed(1)} MB` : ""}，正在提取音轨…`);
+            const message = details.phase === "fallback" ? "正在改用兼容方式读取回放…"
+              : details.phase === "index" ? `正在读取回放索引 · 已读取 ${amount} MB…`
+              : `已读取 ${amount} MB，正在提取音轨…`;
+            setRow(id, "loading", message);
           },
         });
+        const { blob, duration, codec } = audio;
         signal.throwIfAborted();
         const filename = audioFilename(getDownloadFolder(), id, result.title);
         setRow(id, "saving", "音轨提取完成，正在保存文件…");
@@ -77,8 +81,11 @@ async function run(ids) {
           status: "downloaded", audio_file: filename, download_id: downloadId,
           duration_seconds: Math.round(duration * 1000) / 1000,
           size_bytes: blob.size, codec, downloaded_at: new Date().toISOString(),
+          download_method: audio.method, transferred_bytes: audio.transferredBytes,
+          media_size_bytes: audio.mediaBytes, media_requests: audio.requests,
+          ...(audio.fallbackReason ? { fallback_reason: audio.fallbackReason } : {}),
         });
-        setRow(id, "downloaded", `已保存 · ${(duration / 60).toFixed(1)} 分钟 · ${(blob.size / 1024 / 1024).toFixed(1)} MB`);
+        setRow(id, "downloaded", `已保存 · ${(duration / 60).toFixed(1)} 分钟 · ${(blob.size / 1024 / 1024).toFixed(1)} MB · 读取 ${(audio.transferredBytes / 1024 / 1024).toFixed(1)} MB`);
       } catch (error) {
         result.status = signal.aborted ? "cancelled" : "error";
         result.reason = signal.aborted ? "已取消" : humanizeError(error);

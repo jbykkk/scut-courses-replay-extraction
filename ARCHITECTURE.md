@@ -94,7 +94,8 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 | `extension/requests.js` | 字幕与音频共享的 JSON 请求、超时重试和课程页面内回退 |
 | `extension/audio-core.js` | 音频任务参数验证、媒体选择、文件名和 WebVPN 媒体地址处理 |
 | `extension/audio.html` / `audio-page.mjs` | 独立音频任务页面、逐节下载、取消、重试与结果报告 |
-| `extension/mp4-audio.mjs` | 流式读取 MP4、选择 AAC 音轨并封装为 M4A |
+| `extension/mp4-audio.mjs` | 优先选择读取音轨，失败时回退完整读取，统一输出 M4A 与读取统计 |
+| `extension/mp4-audio-range.mjs` | 浏览器与 Node 共用的稀疏索引、multipart Range 校验与 AAC 封装 |
 | `extension/audio-download.mjs` | 跟踪 Chrome 下载完成/中断，管理 Blob 生命周期 |
 | `extension/vendor/` | MP4Box.js 2.5.0 的固定 ESM 发布包、来源校验信息与 BSD 许可证 |
 | `extension/jszip.min.js` | JSZip 库，用于 ZIP 打包 |
@@ -113,21 +114,23 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 
 5. **浏览器内音频下载**：弹窗提供当前课时、已选回放和本次报告中的 `no_subtitle` 课时三个入口，将 origin、课程名称、课程/课时 ID 和来源标签页 ID 传给独立的 `audio.html` 标签页。批量下载统一按复选框中的已选课时执行，按钮显示已选数量；列表顶部复选框控制全选/全不选，没有单独绕过勾选状态的全部下载入口。字幕导出期间所有音频入口禁用。参数在音频页再次验证，API 使用与字幕完全相同的 `requests.js`。媒体优先级与 CLI 一致；仅允许已有两个受信站点的 HTTPS 媒体，校外任务会把元信息中残留的校内绝对媒体地址映射到 WebVPN origin，不新增站点权限。
 
-   当前使用的是同时包含画面与声音的 MP4 地址。插件边读取网络数据边解析，但会读取完整 MP4；仅将音轨保存为 M4A，不将视频另存到磁盘。音轨直接复制并重新封装，不解码或重新编码，因此不会引入额外音质损失。插件内置 MP4Box.js，不依赖本机 ffmpeg、ffprobe 或其他转换软件；Python CLI 使用本机 ffmpeg/ffprobe 实现提取与校验。当前没有接入独立音频源或 HTTP Range 音轨选择下载，最终文件较小不代表网络传输量也较小。
+   当前使用的是同时包含画面与声音的 MP4 地址。插件优先读取 `moov` 索引，取得 AAC 样本的原文件偏移和长度；将音频范围按每批最多 128 段、4 个并发请求读取，通过 `multipart/byteranges` 跳过大部分画面数据。共享模块使用 Uint8Array/TextEncoder/TextDecoder，无 Node 专属依赖；稀疏缓冲通过 `fileStart` 保留原文件偏移，兼容索引位于头部或末尾的普通 MP4。音轨直接复制并重新封装，不解码或重新编码，因此不会引入额外音质损失。插件内置 MP4Box.js，不依赖本机 ffmpeg、ffprobe 或其他转换软件；Python CLI 使用本机 ffmpeg/ffprobe 实现提取与校验。尚未发现并接入独立音频源。
 
-   音频页串行处理课时，使用内置 MP4Box.js 保留并解析 MP4 数据（兼容 moov 位于文件末尾），只选择 AAC 音轨并生成音频初始化段与媒体片段。每 1000 个样本输出一段并释放样本副本，结束时检查已输出样本数与轨道总样本数一致，再生成带 M4A 容器标识、MIME 为 `audio/x-m4a` 的 Blob，避免 Chrome 自动改用 `.mp4` 扩展名。此过程只封装，不转码。读取媒体时有 30 秒空闲超时和 1 GB 上限；取消操作中止 fetch 并清理解析状态。MP4 数据和生成的音频会占用浏览器内存，任务页关闭会中止尚未完成的提取。
+   Range 响应校验 Content-Range、文件总长、片段覆盖、读取预算及可用的资源校验标识，并携带当前浏览器会话。服务器忽略 Range、响应不兼容、索引预算超限或不支持稀疏解析时，只回退一次既有完整读取流程；回退前停止范围读取并丢弃未完成输出。取消不会触发回退；认证/其他明确 HTTP 错误及超过 1 GB 的文件直接报错。两种方式均只保存 M4A，不将视频另存到磁盘。
+
+   音频页串行处理课时，使用内置 MP4Box.js 保留并解析 MP4 数据（兼容 moov 位于文件末尾），只选择 AAC 音轨并生成音频初始化段与媒体片段。每 1000 个样本输出一段并释放样本副本，结束时检查已输出样本数与轨道总样本数一致，再生成带 M4A 容器标识、MIME 为 `audio/x-m4a` 的 Blob，避免 Chrome 自动改用 `.mp4` 扩展名。此过程只封装，不转码。完整读取有 30 秒空闲超时；Range 请求有 30 秒总超时，索引有 16 MiB 探测预算。两种方式均保留 1 GB 媒体上限；取消操作中止 fetch 并清理解析状态。MP4 数据和生成的音频会占用浏览器内存，任务页关闭会中止尚未完成的提取。
 
    每次音频任务固定使用一个 `audio_<课程名称>_<下载时间>/` 目录，时间取任务开始时的本地时间，格式为 `YYYY-MM-DD_HH-mm-ss`。课程名称优先取弹窗参数，其次取课时元信息，缺失时使用课程 ID；名称先清理非法路径字符。同批次的音频、重试输出和 JSON 报告共用目录。
 
-   `audio-download.mjs` 通过 `chrome.downloads.onChanged` 和 `search` 确认文件保存完成或中断，完成后才释放 Blob URL。失败课时保留原因并可重试，已成功保存的课时不重复执行；用户可保存包含成功媒体清单和逐课结果的 JSON。字幕下载过程中的音频入口会禁用，防止新标签页关闭弹窗；字幕格式转换、ZIP 和字幕报告逻辑不变。插件无须运行本地 CLI，也不会加载远程脚本。
+   `audio-download.mjs` 通过 `chrome.downloads.onChanged` 和 `search` 确认文件保存完成或中断，完成后才释放 Blob URL。失败课时保留原因并可重试，已成功保存的课时不重复执行；用户可保存包含成功媒体清单和逐课结果的 JSON，并记录 `download_method`（`ranges` / `full`）、`transferred_bytes`（JS 读取的响应体字节）、`media_size_bytes`、`media_requests` 及可选的 `fallback_reason`。进度区分读取索引和提取音轨，完成后显示读取量；回退时显示兼容读取提示。字幕下载过程中的音频入口会禁用，防止新标签页关闭弹窗；字幕格式转换、ZIP 和字幕报告逻辑不变。插件无须运行本地 CLI，也不会加载远程脚本。
 
 6. **格式选项与课程名称**：当前课时和全部课时均使用 `.srt`、`.txt`、`.json` 标签，默认仅勾选 `.txt`；选项通过 `flex-wrap` 横向排列，空间不足时换行。课程名优先读取当前课时的 `data.course_title`，其次兼容备用课程接口的 `data` / `result.data` 对象或数组，忽略空白与非字符串值。获取到的名称用于弹窗、完整名称提示、字幕 ZIP 名称、导出报告及音频任务参数；元信息失败不会阻止字幕下载。
 
 7. **音频转写边界**：下载流程仅提取平台字幕或回放音轨，不自动执行语音识别。MacParakeet 是可选的外部转写工具，其 macOS 使用方式见 [docs/macparakeet.md](docs/macparakeet.md)；其他系统可自行选择 ASR 工具。
 
-### 音频选择下载实验
+### 音频选择下载与探测
 
-`scripts/audio-range.mjs` 是独立的 Node.js 原型，通过 MP4 索引定位 AAC 样本，并使用 HTTP 多范围响应选择读取音轨。当前插件仍使用上述完整 MP4 读取流程。真实课程的响应体读取量从约 366 MB 降到 62 MB，AAC 数据与已归档音频一致；实现、取舍、复现命令和未验证场景见 [音频选择下载探索](docs/audio-download-exploration.md)。原型测试位于 `tests/audio-range.test.mjs`，由统一检查执行。
+`scripts/audio-range.mjs` 是独立的 Node.js 探测入口，与插件共用 `extension/mp4-audio-range.mjs`；脚本本身保留明确失败的行为，插件入口负责自动回退。真实课程的响应体读取量从约 366 MB 降到 62 MB，AAC 数据与已归档音频一致；实现、取舍、复现命令和未验证场景见 [音频选择下载探索](docs/audio-download-exploration.md)。原型测试位于 `tests/audio-range.test.mjs`，由统一检查执行。
 
 ## 输入与文件路径安全
 

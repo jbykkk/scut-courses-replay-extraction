@@ -52,6 +52,9 @@ class ExtensionBrowserCase(unittest.TestCase):
         self.origin = ORIGIN
         self.media = {}
         self.media_error = False
+        self.range_media = False
+        self.malformed_range = False
+        self.media_requests = []
         self.page.add_init_script("""(() => {
             window.downloads = [];
             window.openedTabs = [];
@@ -139,8 +142,28 @@ class ExtensionBrowserCase(unittest.TestCase):
                 body = self.course_title_body
             route.fulfill(json=body)
         elif url.path.startswith('/media/'):
+            range_header = route.request.headers.get('range')
+            self.media_requests.append(range_header)
             if self.media_error:
                 route.fulfill(status=503, body='unavailable')
+            elif self.range_media and range_header:
+                data = (Path(__file__).parent / 'fixtures/replay-aac.mp4').read_bytes()
+                ranges = []
+                for item in range_header.removeprefix('bytes=').split(','):
+                    first, last = map(int, item.split('-'))
+                    ranges.append((first, min(last + 1, len(data))))
+                if self.malformed_range:
+                    route.fulfill(status=206, body=data, content_type='video/mp4')
+                elif len(ranges) == 1:
+                    first, end = ranges[0]
+                    route.fulfill(status=206, body=data[first:end], content_type='video/mp4',
+                                  headers={'Content-Range': f'bytes {first}-{end - 1}/{len(data)}'})
+                else:
+                    body = b''.join(
+                        f'\r\n--audio-test\r\nContent-Type: video/mp4\r\nContent-Range: bytes {first}-{end - 1}/{len(data)}\r\n\r\n'.encode() + data[first:end]
+                        for first, end in ranges
+                    ) + b'\r\n--audio-test--\r\n'
+                    route.fulfill(status=206, body=body, content_type='multipart/byteranges; boundary="audio-test"')
             else:
                 route.fulfill(path=Path(__file__).parent / 'fixtures/replay-aac.mp4', content_type='video/mp4')
         else:
@@ -483,6 +506,9 @@ class AudioPageTests(ExtensionBrowserCase):
         self.assertEqual(report['items'][0]['size_bytes'], len(content))
         self.assertEqual(report['items'][0]['status'], 'downloaded')
         self.assertEqual(report['items'][0]['audio_file'], download['filename'])
+        self.assertEqual(report['items'][0]['download_method'], 'full')
+        self.assertEqual(report['items'][0]['transferred_bytes'], (Path(__file__).parent / 'fixtures/replay-aac.mp4').stat().st_size)
+        self.assertEqual(self.media_requests, ['bytes=0-65535', None])
         self.assertEqual(self.page.evaluate('window.downloads[1].filename'),
                          f"{download['filename'].split('/')[0]}/媒体地址.json")
         self.assertEqual(self.page.evaluate('window.downloadListeners.size'), 0)
@@ -516,6 +542,48 @@ class AudioPageTests(ExtensionBrowserCase):
         self.wait_complete()
         folder = self.page.evaluate('window.downloads[0].filename').split('/')[0]
         self.assertRegex(folder, r'^audio_数字系统设计_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$')
+
+    def test_selective_download_works_in_browser_and_records_transfer_method(self):
+        self.range_media = True
+        self.open_audio()
+        self.wait_complete()
+        self.assertEqual(self.media_requests, ['bytes=0-65535'])
+        self.page.locator('#audio-report-btn').click()
+        self.page.wait_for_function('window.downloads.length === 2')
+        report = json.loads(base64.b64decode(self.page.evaluate('window.downloads[1].base64')))
+        item = report['items'][0]
+        self.assertEqual(item['download_method'], 'ranges')
+        self.assertEqual(item['media_requests'], 1)
+        self.assertEqual(item['transferred_bytes'], (Path(__file__).parent / 'fixtures/replay-aac.mp4').stat().st_size)
+        self.assertNotIn('fallback_reason', item)
+
+    def test_portable_module_extracts_multipart_audio_without_node_globals(self):
+        self.range_media = True
+        self.page.goto(f'{self.origin}/popup.html')
+        result = self.page.evaluate('''async () => {
+            const {inspectAudio, downloadIndexedAudio} = await import('/mp4-audio-range.mjs');
+            const index = await inspectAudio(location.origin + '/media/replay.mp4', {chunkSize: 256});
+            const {blob, summary} = await downloadIndexedAudio(index, {batchSize: 8});
+            return {size: blob.size, codec: summary.codec, nodeBuffer: typeof Buffer};
+        }''')
+        self.assertEqual(result['nodeBuffer'], 'undefined')
+        self.assertEqual(result['codec'], 'mp4a.40.2')
+        self.assertGreater(result['size'], 0)
+        self.assertTrue(any(',' in header for header in self.media_requests))
+
+    def test_invalid_range_response_automatically_uses_full_download(self):
+        self.range_media = True
+        self.malformed_range = True
+        self.open_audio()
+        self.wait_complete()
+        self.assertEqual(self.media_requests, ['bytes=0-65535', None])
+
+    def test_webvpn_selective_download_keeps_the_external_media_origin(self):
+        self.origin = EXTERNAL_ORIGIN
+        self.range_media = True
+        self.open_audio()
+        self.wait_complete()
+        self.assertEqual(self.media_requests, ['bytes=0-65535'])
 
     def test_media_http_failure_and_download_interruption_are_reported(self):
         self.media_error = True
