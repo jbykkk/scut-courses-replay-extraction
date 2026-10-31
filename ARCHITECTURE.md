@@ -2,7 +2,7 @@
 
 ## 概述
 
-本工具从华南理工大学“华园视频”平台提取课程回放字幕，同时支持校内站点 `video.jw.scut.edu.cn` 和 WebVPN 校外站点 `video-jw-443.webvpn.scut.edu.cn`。华园视频在播放课程时，前端通过 API 拉取字幕 JSON 数据，无需逆向加密或破解流媒体协议。对于平台没有生成字幕的课时，CLI 可单独从普通 MP4 回放提取音轨，供后续 ASR 使用。
+本工具从华南理工大学“华园视频”平台提取课程回放字幕，同时支持校内站点 `video.jw.scut.edu.cn` 和 WebVPN 校外站点 `video-jw-443.webvpn.scut.edu.cn`。华园视频在播放课程时，前端通过 API 拉取字幕 JSON 数据，无需逆向加密或破解流媒体协议。对于平台没有生成字幕的课时，CLI 和浏览器插件均可单独从普通 MP4 回放提取音轨，供后续 ASR 使用。
 
 ## 双站点模型
 
@@ -67,13 +67,13 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 
 4. **课程目录**：先打开当前站点 origin，再通过 `page.evaluate()` 调用相对路径 `/courseapi/v2/course/catalogue?course_id=xxx`。浏览器自动把相对路径解析到校内或校外 origin。
 
-5. **回放音频**：`audio` 支持课程链接、`--course-id`/`--sub-id`、插件的 `字幕导出结果.json`；报告默认仅选 `no_subtitle`，`--include-errors` 加入 `error`。所有 ID 在浏览器启动前校验，输入课程和站点冲突时拒绝执行。`browser.get_replay_info()` 在目标 origin 内携带登录 Cookie 请求 `get-sub-info`，超时为 20 秒，并检查 HTTP、业务状态和 JSON 结构。
+5. **回放音频**：`audio` 支持课程链接、`--course-id`/`--sub-id`、插件的 `字幕导出结果.json`；报告默认仅选 `no_subtitle`，`--include-errors` 加入 `error`。所有 ID 在浏览器启动前校验，输入课程和站点冲突时拒绝执行。`browser.get_replay_info()` 在目标 origin 内携带登录 Cookie 请求 `get-sub-info`，超时为 20 秒，并检查 HTTP、业务状态和 JSON 结构。用户使用说明见 [回放音频下载](docs/audio-download.md)。
 
-   媒体选择顺序为 `content.save_playback.contents` → `content.playback.url` → `video_list`（优先 `type=3` 教师画面）→ `playurl`。仅接受 HTTP(S) 地址，当前不处理 HLS 或需要媒体 Cookie 的回放。获取接口所需的登录态由 Playwright 管理；ffmpeg 读取平台返回的可直接访问的媒体 URL。
+   **媒体选择**：顺序为 `content.save_playback.contents` → `content.playback.url` → `video_list`（优先 `type=3` 教师画面）→ `playurl`。仅接受 HTTP(S) 地址，当前不处理 HLS 或需要媒体 Cookie 的回放。获取接口所需的登录态由 Playwright 管理；ffmpeg 读取平台返回的可直接访问的媒体 URL。
 
-   ffmpeg 使用 `-map 0:a:0 -vn -c:a copy -movflags +faststart` 提取首个音轨，不转码；网络读取超时为 30 秒。异步子进程避免阻塞浏览器事件循环，取消任务时会终止子进程并清理临时文件。输出按 `course_id` 分目录，日期和 ID 组成文件名；路径解析后检查目录包含关系。下载到同目录的唯一临时文件，ffprobe 校验音轨与时长后原子替换。已有有效文件默认跳过，失败重下不会损坏原文件。
+   **提取与校验**：ffmpeg 使用 `-map 0:a:0 -vn -c:a copy -movflags +faststart` 提取首个音轨，不转码；网络读取超时为 30 秒。异步子进程避免阻塞浏览器事件循环，取消任务时会终止子进程并清理临时文件。输出按 `course_id` 分目录，日期和 ID 组成文件名；路径解析后检查目录包含关系。下载到同目录的唯一临时文件，ffprobe 校验音轨与时长后原子替换。已有有效文件默认跳过，失败重下不会损坏原文件。
 
-   每门课的 `媒体地址.json` 原子更新，保留其他课时以及跳过文件原有的下载时间。损坏清单报错，不静默覆盖。`--dry-run` 仅请求并显示课时信息，不依赖 ffmpeg 或写本地文件。批量任务默认继续处理后续课时，任何失败使命令退出码为 1。
+   **清单与错误处理**：每门课的 `媒体地址.json` 原子更新，保留其他课时以及跳过文件原有的下载时间。损坏清单报错，不静默覆盖。`--dry-run` 仅请求并显示课时信息，不依赖 ffmpeg 或写本地文件。批量任务默认继续处理后续课时，任何失败使命令退出码为 1。
 
 ### Chrome 插件（Manifest V3）
 
@@ -94,7 +94,8 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 | `extension/requests.js` | 字幕与音频共享的 JSON 请求、超时重试和课程页面内回退 |
 | `extension/audio-core.js` | 音频任务参数验证、媒体选择、文件名和 WebVPN 媒体地址处理 |
 | `extension/audio.html` / `audio-page.mjs` | 独立音频任务页面、逐节下载、取消、重试与结果报告 |
-| `extension/mp4-audio.mjs` | 流式读取 MP4、选择 AAC 音轨并封装为 M4A |
+| `extension/mp4-audio.mjs` | 优先选择读取音轨，失败时回退完整读取，统一输出 M4A 与读取统计 |
+| `extension/mp4-audio-range.mjs` | 浏览器与 Node 共用的稀疏索引、multipart Range 校验与 AAC 封装 |
 | `extension/audio-download.mjs` | 跟踪 Chrome 下载完成/中断，管理 Blob 生命周期 |
 | `extension/vendor/` | MP4Box.js 2.5.0 的固定 ESM 发布包、来源校验信息与 BSD 许可证 |
 | `extension/jszip.min.js` | JSZip 库，用于 ZIP 打包 |
@@ -111,11 +112,25 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 
 4. **与 CLI 共享逻辑**：JSON 递归解析（`extractSubtitleItems`）和格式转换（`toSrt`、`toTxt`）逻辑一致。两端读取 `tests/fixtures/` 中同一组 URL 与字幕转换向量，防止实现再次分叉。SRT 要求有效开始时间，缺失结束时间使用 `+5s`；TXT 只依赖非空文本。
 
-5. **浏览器内音频下载**：弹窗提供当前课时、已选回放和本次报告中的 `no_subtitle` 课时三个入口，将 origin、课程/课时 ID 和来源标签页 ID 传给独立的 `audio.html` 标签页。批量下载统一按复选框中的已选课时执行，按钮显示已选数量；列表顶部复选框控制全选/全不选，没有单独绕过勾选状态的全部下载入口。字幕导出期间所有音频入口禁用。参数在音频页再次验证，API 使用与字幕完全相同的 `requests.js`。媒体优先级与 CLI 一致；仅允许已有两个受信站点的 HTTPS 媒体，校外任务会把元信息中残留的校内绝对媒体地址映射到 WebVPN origin，不新增站点权限。
+5. **浏览器内音频下载**：弹窗提供当前课时、已选回放和本次报告中的 `no_subtitle` 课时三个入口，将 origin、课程名称、课程/课时 ID 和来源标签页 ID 传给独立的 `audio.html` 标签页。批量下载统一按复选框中的已选课时执行，按钮显示已选数量；列表顶部复选框控制全选/全不选，没有单独绕过勾选状态的全部下载入口。字幕导出期间所有音频入口禁用。参数在音频页再次验证，API 使用与字幕完全相同的 `requests.js`。媒体优先级与 CLI 一致；仅允许已有两个受信站点的 HTTPS 媒体，校外任务会把元信息中残留的校内绝对媒体地址映射到 WebVPN origin，不新增站点权限。
 
-   音频页串行处理课时，使用内置 MP4Box.js 保留并解析 MP4 数据（兼容 moov 位于文件末尾），只选择 AAC 音轨并生成音频初始化段与媒体片段。每 1000 个样本输出一段并释放样本副本，结束时检查已输出样本数与轨道总样本数一致，再生成带 M4A 容器标识、MIME 为 `audio/x-m4a` 的 Blob，避免 Chrome 自动改用 `.mp4` 扩展名。此过程只封装，不转码。读取媒体时有 30 秒空闲超时和 1 GB 上限；取消操作中止 fetch 并清理解析状态。MP4 数据和生成的音频会占用浏览器内存，任务页关闭会中止尚未完成的提取。
+   **媒体与 Range 读取**：当前使用的是同时包含画面与声音的 MP4 地址。插件优先读取 `moov` 索引，取得 AAC 样本的原文件偏移和长度；将音频范围按每批最多 128 段、4 个并发请求读取，通过 `multipart/byteranges` 跳过大部分画面数据。共享模块使用 Uint8Array/TextEncoder/TextDecoder，无 Node 专属依赖；稀疏缓冲通过 `fileStart` 保留原文件偏移，兼容索引位于头部或末尾的普通 MP4。音轨直接复制并重新封装，不解码或重新编码，因此不会引入额外音质损失。插件内置 MP4Box.js，不依赖本机 ffmpeg、ffprobe 或其他转换软件；Python CLI 使用本机 ffmpeg/ffprobe 实现提取与校验。尚未发现并接入独立音频源。
 
-   `audio-download.mjs` 通过 `chrome.downloads.onChanged` 和 `search` 确认文件保存完成或中断，完成后才释放 Blob URL。失败课时保留原因并可重试，已成功保存的课时不重复执行；用户可保存包含成功媒体清单和逐课结果的 JSON。字幕下载过程中的音频入口会禁用，防止新标签页关闭弹窗；字幕格式转换、ZIP 和字幕报告逻辑不变。插件无须运行本地 CLI，也不会加载远程脚本。
+   Range 响应校验 Content-Range、文件总长、片段覆盖、读取预算及可用的资源校验标识，并携带当前浏览器会话。服务器忽略 Range、响应不兼容、索引预算超限或不支持稀疏解析时，只回退一次既有完整读取流程；回退前停止范围读取并丢弃未完成输出。取消不会触发回退；认证/其他明确 HTTP 错误及超过 1 GB 的文件直接报错。两种方式均只保存 M4A，不将视频另存到磁盘。
+
+   **M4A 封装**：音频页串行处理课时，使用内置 MP4Box.js 保留并解析 MP4 数据（兼容 moov 位于文件末尾），只选择 AAC 音轨并生成音频初始化段与媒体片段。每 1000 个样本输出一段并释放样本副本，结束时检查已输出样本数与轨道总样本数一致，再生成带 M4A 容器标识、MIME 为 `audio/x-m4a` 的 Blob，避免 Chrome 自动改用 `.mp4` 扩展名。此过程只封装，不转码。完整读取有 30 秒空闲超时；Range 请求有 30 秒总超时，索引有 16 MiB 探测预算。两种方式均保留 1 GB 媒体上限；取消操作中止 fetch 并清理解析状态。MP4 数据和生成的音频会占用浏览器内存，任务页关闭会中止尚未完成的提取。
+
+   每次音频任务固定使用一个 `audio_<课程名称>_<下载时间>/` 目录，时间取任务开始时的本地时间，格式为 `YYYY-MM-DD_HH-mm-ss`。课程名称优先取弹窗参数，其次取课时元信息，缺失时使用课程 ID；名称先清理非法路径字符。同批次的音频、重试输出和 JSON 报告共用目录。
+
+   **下载与报告**：`audio-download.mjs` 通过 `chrome.downloads.onChanged` 和 `search` 确认文件保存完成或中断，完成后才释放 Blob URL。失败课时保留原因并可重试，已成功保存的课时不重复执行；用户可保存包含成功媒体清单和逐课结果的 JSON，并记录 `download_method`（`ranges` / `full`）、`transferred_bytes`（JS 读取的响应体字节）、`media_size_bytes`、`media_requests` 及可选的 `fallback_reason`。进度区分读取索引和提取音轨，完成后显示读取量；回退时显示兼容读取提示。字幕下载过程中的音频入口会禁用，防止新标签页关闭弹窗；字幕格式转换、ZIP 和字幕报告逻辑不变。插件无须运行本地 CLI，也不会加载远程脚本。
+
+6. **格式选项与课程名称**：当前课时和全部课时均使用 `.srt`、`.txt`、`.json` 标签，默认仅勾选 `.txt`；选项通过 `flex-wrap` 横向排列，空间不足时换行。课程名优先读取当前课时的 `data.course_title`，其次兼容备用课程接口的 `data` / `result.data` 对象或数组，忽略空白与非字符串值。获取到的名称用于弹窗、完整名称提示、字幕 ZIP 名称、导出报告及音频任务参数；元信息失败不会阻止字幕下载。
+
+7. **音频转写边界**：下载流程仅提取平台字幕或回放音轨，不自动执行语音识别。转写是可选的外部步骤；macOS 上可使用 MacParakeet 等本地 Whisper 工具，说明见 [docs/macparakeet.md](docs/macparakeet.md)；其他系统可自行选择 ASR 工具。
+
+### 音频选择下载与探测
+
+`scripts/audio-range.mjs` 是独立的 Node.js 探测入口，与插件共用 `extension/mp4-audio-range.mjs`；脚本本身保留明确失败的行为，插件入口负责自动回退。真实课程的响应体读取量从约 366 MB 降到 62 MB，AAC 数据与已归档音频一致；实现、取舍、复现命令和未验证场景见 [音频选择下载探索](docs/audio-download-exploration.md)。原型测试位于 `tests/audio-range.test.mjs`，由统一检查执行。
 
 ## 输入与文件路径安全
 
@@ -128,7 +143,7 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 | 登录 | Playwright 登录，校内外状态分开持久化 | 用户在对应站点自行登录 |
 | 字幕获取 | 网络拦截（需加载播放页） | 直接 fetch API |
 | 批量导出 | 需逐个打开标签页 | 直接循环 fetch，ZIP 打包 |
-| 依赖 | Python + Playwright + Chromium | 无（纯浏览器插件） |
+| 依赖 | Python + Playwright + Chromium；音频提取需 ffmpeg/ffprobe | Chrome/Edge；内置 JSZip 和 MP4Box.js，无需外部转换软件 |
 | 适用场景 | 本地脚本自动化 | 日常使用，一键下载 |
 
 ## 涉及的 API 端点

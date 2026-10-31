@@ -1,14 +1,16 @@
-# 使用 MacParakeet 转写课程音频
+# macOS 本地 Whisper 转写
 
-本项目负责下载平台已有的字幕和回放音频。下载完成后，可以自行选择语音识别工具生成文字或字幕；这里记录 macOS 上使用 MacParakeet 的一种已验证流程。
+本项目负责下载平台已有的字幕和回放音频。下载完成后，可以自行选择语音识别工具生成文字或字幕；这里记录 macOS 上使用本地 Whisper 的一种已验证流程（通过 MacParakeet 提供的 CLI 和 Whisper 引擎）。
 
-本文整理自 2026-10-30 的课程音频转写记录。实测环境为 Apple M5、16 GB 内存、MacParakeet 0.8.7、`macparakeet-cli 4.4.0`。MacParakeet 面向 Apple Silicon Mac，安装入口与系统要求见[官方项目](https://github.com/moona3k/macparakeet)。下面的参数已与本机 CLI 帮助核对，升级后以 `--help` 和 `models list` 为准。
+本文整理自课程音频转写记录。实测环境为 Apple M5、16 GB 内存、MacParakeet 0.8.7、`macparakeet-cli 4.4.0`。MacParakeet 面向 Apple Silicon Mac，安装入口与系统要求见[MacParakeet 官方](https://github.com/moona3k/macparakeet)。下面的参数已与本机 CLI 帮助核对，升级后以 `--help` 和 `models list` 为准。
+
+> **模型说明**：本文示例使用 **Whisper Large v3 Turbo**。Whisper 是 OpenAI 开源的语音识别（ASR）模型，由 WhisperKit Core ML 在本地运行；`--engine whisper` 是复现本文结果的关键。
 
 ## 1. 准备音频与 CLI
 
 先使用本项目的浏览器插件或 `audio` 命令下载音频。默认位置：
 
-- 浏览器插件：浏览器下载目录下的 `audio_<course_id>/`。
+- 浏览器插件：浏览器下载目录下的 `audio_<课程名称>_<下载时间>/`，时间格式为 `YYYY-MM-DD_HH-mm-ss`。
 - 命令行：项目下的 `output/audio/<course_id>/`。
 
 下文命令从本项目根目录执行，使用示例课程 ID `12345`；请替换为自己的课程和实际文件名。
@@ -27,7 +29,7 @@ CLI="/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli"
 
 ## 2. 选择记录中使用的模型
 
-MacParakeet 是应用名称；本次转写使用它的 **Whisper 引擎**，模型为 **Whisper Large v3 Turbo**，由 WhisperKit Core ML 运行。后面的命令均显式设置 `--engine whisper`。
+本次转写使用 **Whisper 引擎**，模型为 **Whisper Large v3 Turbo**。Whisper 是 OpenAI 开源的语音识别（ASR）模型，由 WhisperKit Core ML 在本地运行。后面的命令均显式设置 `--engine whisper`。
 
 | 项目 | 实测配置 |
 |---|---|
@@ -50,7 +52,7 @@ CLI="/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli"
 
 模型首次下载需要联网。`models select` 会更新 App 与 CLI 共用的默认模型；已有该模型时可直接确认选择与安装状态。本次记录的状态包含 `Whisper model downloaded: Yes`。
 
-CLI 4.4.0 的 `transcribe` 默认引擎为 `parakeet`。指定 `--engine whisper` 可以复现本文使用的引擎；`app-default` 则跟随保存的应用设置。
+CLI 4.4.0 的 `transcribe` 默认引擎为 `parakeet`。指定 `--engine whisper` 可以复现本文使用的引擎；`app-default` 则跟随保存的应用设置。如果希望 `app-default` 也使用 Whisper，可再执行 `"$CLI" config set speech-engine whisper`；否则请像本文一样在每次 `transcribe` 时显式传入 `--engine whisper`。
 
 ## 3. 转写单个文件
 
@@ -74,7 +76,7 @@ CLI="/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli"
 
 ## 4. 批量转写
 
-CLI 可以接收文件夹，也可以显式传入多个文件。指定 `--output-dir` 后逐个写入结果，每个输入对应一个文件：
+CLI 可以接收文件夹，也可以显式传入多个文件。指定 `--output-dir` 后逐个写入结果，每个输入对应一个文件。如果文件夹里还有媒体清单或结果报告 JSON，建议直接传入音频文件列表，避免把非音视频文件一起交给 CLI。
 
 ```bash
 CLI="/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli"
@@ -93,7 +95,7 @@ CLI="/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli"
   --format transcript --mode raw \
   --speaker-detection off --no-history \
   --output-dir "./output/transcripts/12345" \
-  "$HOME/Downloads/audio_12345"
+  "$HOME/Downloads/audio_示例课程_下载时间"
 ```
 
 只处理部分文件时，将最后的目录参数替换为需要的文件路径，例如：
@@ -120,15 +122,31 @@ CLI="/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli"
 | `--format text` | 带文件信息、说话人标签和逐词时间戳，输出更长 |
 | `--format srt` | 带时间轴的字幕文件 |
 | `--language en` | 本次英文课程的语言提示，按音频语言调整 |
-| `--mode raw` | 保留口语和填充词；`clean` 会清理文本，`app-default` 跟随设置 |
+| `--mode raw` | 不做额外文本清理；`clean` 会清理文本，`app-default` 跟随设置。实际是否出现 filler 取决于模型 |
 | `--speaker-detection off` | 本次单人授课关闭说话人分离；需要区分多人时可改为 `on` |
 | `--no-history` | 不将本次完成的转写写入 App 历史记录 |
 | `--output-dir` | 为每个输入保存一个同名结果文件 |
 
 ## 6. 实测与结果校对
 
-关闭说话人识别并使用 `transcript` 后，120 秒样本约用 8 秒；四节各约 95 分钟的课程合计约用 13 分钟。完整配置、对照数据和适用范围见[转写方法与实验记录](transcription-notes.md)。
+关闭说话人识别并使用 `transcript` 后，120 秒样本约用 8 秒；四节各约 95 分钟的课程合计约用 13 分钟。首次运行或长时间未用后，Core ML 需要约 1–2 分钟加载/编译模型（本机首次实测约 2 分钟）；上面的 13 分钟不含首次加载。速度和效果会随硬件、模型和音频变化。
 
-专业术语仍需校对，例如历史结果中出现过 `VHDL` 被识别为 `VHDR`、`concurrent` 被拆成 `co-current`。复习时可对照课件和原音频修正。
+专业术语仍需校对。本次实测中 `VHDL` / `FPGA` / `Verilog` 基本正确；更常见的是 `AND gate` 被写成 `end gate`、`OR gate` 被写成 `all gate`，个别停顿处还可能出现多语言幻觉。复习时请对照课件和原音频修正。
+
+## 7. 隐私与第三方边界
+
+MacParakeet 是第三方应用，本项目不捆绑、不审计。CLI 默认发送 privacy-safe 的 `cli_operation` 遥测（不包含路径、文本、语言值或用户内容）；如需关闭：
+
+```bash
+CLI="/Applications/MacParakeet.app/Contents/MacOS/macparakeet-cli"
+
+MACPARAKEET_TELEMETRY=0 "$CLI" transcribe ...
+# 或
+DO_NOT_TRACK=1 "$CLI" transcribe ...
+# 或
+"$CLI" config set telemetry off
+```
+
+本文使用的 Whisper 转写在本地模型上完成；App 的其他功能（如 LLM 总结）可能有各自的网络和隐私设置，使用前请查看官方说明。
 
 这一步是下载完成后的独立操作。插件和本项目 CLI 不会自动安装 MacParakeet、下载模型或执行转写。

@@ -1,4 +1,5 @@
 import { createFile, Log } from "./vendor/mp4box.all.mjs";
+import { inspectAudio, downloadIndexedAudio, MediaRequestError, MediaLimitError } from "./mp4-audio-range.mjs";
 
 Log.setLogLevel(Log.error);
 const MAX_BYTES = 1024 * 1024 * 1024;
@@ -52,7 +53,7 @@ export function createAudioExtractor() {
   };
 }
 
-export async function extractAudio(url, { signal, onProgress = () => {} } = {}) {
+async function extractFullAudio(url, { signal, onProgress = () => {} } = {}) {
   const controller = new AbortController();
   const cancel = () => controller.abort(signal?.reason);
   signal?.throwIfAborted();
@@ -85,7 +86,7 @@ export async function extractAudio(url, { signal, onProgress = () => {} } = {}) 
     }
     signal?.throwIfAborted();
     if (total && received !== total) throw new Error("媒体下载不完整，请重试");
-    return extractor.finish();
+    return { ...extractor.finish(), method: "full", transferredBytes: received, mediaBytes: total || received, requests: 1 };
   } catch (error) {
     if (controller.signal.aborted) throw controller.signal.reason;
     throw error;
@@ -96,4 +97,52 @@ export async function extractAudio(url, { signal, onProgress = () => {} } = {}) 
     await reader?.cancel().catch(() => {});
     extractor.dispose();
   }
+}
+
+export async function extractAudio(url, { signal, onProgress = () => {} } = {}) {
+  signal?.throwIfAborted();
+  const controller = new AbortController();
+  const cancel = () => controller.abort(signal.reason);
+  signal?.addEventListener("abort", cancel, { once: true });
+  const stats = { requests: 0, transferred_bytes: 0 };
+  let index;
+  let phase = "index";
+  let fraction = 0;
+  let fallbackReason;
+  const notify = () => onProgress(stats.transferred_bytes, index?.reader.total || 0, {
+    mode: "ranges", phase, progress: phase === "index" ? null : fraction,
+  });
+  try {
+    notify();
+    index = await inspectAudio(url, { signal: controller.signal, stats, maxMediaBytes: MAX_BYTES, onBytes: notify });
+    phase = "audio";
+    const { blob, summary } = await downloadIndexedAudio(index, {
+      signal: controller.signal,
+      onProgress(value) { fraction = value; notify(); },
+    });
+    signal?.throwIfAborted();
+    return {
+      blob, duration: index.track.duration / index.track.timescale, codec: index.track.codec,
+      method: "ranges", transferredBytes: summary.transferred_bytes, mediaBytes: summary.media_bytes,
+      requests: summary.requests,
+    };
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (error instanceof MediaRequestError || error instanceof MediaLimitError) throw error;
+    fallbackReason = error.message;
+  } finally {
+    controller.abort();
+    signal?.removeEventListener("abort", cancel);
+    index?.file.stop();
+  }
+  signal?.throwIfAborted();
+  onProgress(stats.transferred_bytes, 0, { mode: "full", phase: "fallback" });
+  const result = await extractFullAudio(url, {
+    signal,
+    onProgress(received, total) {
+      onProgress(received + stats.transferred_bytes, total, { mode: "full", progress: total ? received / total : null });
+    },
+  });
+  return { ...result, transferredBytes: result.transferredBytes + stats.transferred_bytes,
+    requests: result.requests + stats.requests, fallbackReason };
 }

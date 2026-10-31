@@ -2,7 +2,7 @@ import { extractAudio } from "./mp4-audio.mjs";
 import { saveBlob } from "./audio-download.mjs";
 
 const { createApi } = ScutSubtitleCore;
-const { parseTask, mediaFromInfo, audioFilename } = ScutAudioCore;
+const { parseTask, mediaFromInfo, audioFolder, audioFilename } = ScutAudioCore;
 const { requestJson, checkApiResult, humanizeError } = ScutRequests;
 const summary = document.getElementById("audio-summary");
 const progress = document.getElementById("audio-progress");
@@ -11,8 +11,16 @@ const retryButton = document.getElementById("retry-audio");
 const reportButton = document.getElementById("audio-report-btn");
 const results = new Map();
 const rows = new Map();
+const startedAt = new Date();
+let courseTitle = null;
+let downloadFolder = null;
 let controller = null;
 let task;
+
+function getDownloadFolder() {
+  downloadFolder ||= audioFolder(task.courseId, task.courseTitle || courseTitle, startedAt);
+  return downloadFolder;
+}
 
 function setRow(id, state, message, title) {
   const row = rows.get(id);
@@ -46,30 +54,38 @@ async function run(ids) {
         signal.throwIfAborted();
         checkApiResult(body);
         const data = body.data;
+        if (!courseTitle && typeof data?.course_title === "string") courseTitle = data.course_title.trim() || null;
         const media = mediaFromInfo(data, task.origin);
         result.title = data.sub_title || id;
         result.media_url = media.url;
         result.source_field = media.field;
         setRow(id, "loading", "正在读取回放并提取音轨…", result.title);
-        const { blob, duration, codec } = await extractAudio(media.url, {
+        const audio = await extractAudio(media.url, {
           signal,
-          onProgress(received, total) {
+          onProgress(received, total, details) {
             const amount = (received / 1024 / 1024).toFixed(1);
-            if (total) progress.value = Math.round(received * 100 / total);
+            if (details.progress != null) progress.value = Math.min(100, Math.round(details.progress * 100));
             else progress.removeAttribute("value");
-            setRow(id, "loading", `已读取 ${amount} MB${total ? ` / ${(total / 1024 / 1024).toFixed(1)} MB` : ""}，正在提取音轨…`);
+            const message = details.phase === "fallback" ? "正在改用兼容方式读取回放…"
+              : details.phase === "index" ? `正在读取回放索引 · 已读取 ${amount} MB…`
+              : `已读取 ${amount} MB，正在提取音轨…`;
+            setRow(id, "loading", message);
           },
         });
+        const { blob, duration, codec } = audio;
         signal.throwIfAborted();
-        const filename = audioFilename(task.courseId, id, result.title);
+        const filename = audioFilename(getDownloadFolder(), id, result.title);
         setRow(id, "saving", "音轨提取完成，正在保存文件…");
         const downloadId = await saveBlob(blob, filename, signal);
         Object.assign(result, {
           status: "downloaded", audio_file: filename, download_id: downloadId,
           duration_seconds: Math.round(duration * 1000) / 1000,
           size_bytes: blob.size, codec, downloaded_at: new Date().toISOString(),
+          download_method: audio.method, transferred_bytes: audio.transferredBytes,
+          media_size_bytes: audio.mediaBytes, media_requests: audio.requests,
+          ...(audio.fallbackReason ? { fallback_reason: audio.fallbackReason } : {}),
         });
-        setRow(id, "downloaded", `已保存 · ${(duration / 60).toFixed(1)} 分钟 · ${(blob.size / 1024 / 1024).toFixed(1)} MB`);
+        setRow(id, "downloaded", `已保存 · ${(duration / 60).toFixed(1)} 分钟 · ${(blob.size / 1024 / 1024).toFixed(1)} MB · 读取 ${(audio.transferredBytes / 1024 / 1024).toFixed(1)} MB`);
       } catch (error) {
         result.status = signal.aborted ? "cancelled" : "error";
         result.reason = signal.aborted ? "已取消" : humanizeError(error);
@@ -105,7 +121,7 @@ reportButton.addEventListener("click", async () => {
     const entries = task.subIds.map((id) => results.get(id));
     const report = { course_id: task.courseId, origin: task.origin, exported_at: new Date().toISOString(),
       items: entries.filter((item) => item.status === "downloaded"), results: entries };
-    await saveBlob(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }), `audio_${task.courseId}/媒体地址.json`);
+    await saveBlob(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }), `${getDownloadFolder()}/媒体地址.json`);
     reportStatus.textContent = "音频结果报告已保存";
   } catch (error) {
     reportStatus.textContent = `报告保存失败：${humanizeError(error)}`;

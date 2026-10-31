@@ -1,3 +1,6 @@
+# macOS
+.DS_Store
+
 # Python-generated files
 __pycache__/
 *.py[oc]
@@ -15,10 +18,17 @@ data/
 # Output subtitles
 output/
 
-# Local review notes; public transcription guides are versioned
+# Local review notes; public guides are versioned
 docs/*
+!docs/README.md
+!docs/audio-download.md
 !docs/macparakeet.md
-!docs/transcription-notes.md
+!docs/audio-download-exploration.md
+!docs/cli.md
+
+# Local screenshots; never publish
+docs/*.png
+docs/**/*.png
 
 # For Code Review
 .pr-review/

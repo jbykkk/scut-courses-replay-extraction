@@ -58,8 +58,10 @@ def main() -> None:
         "extension/requests.js",
         "extension/audio-core.js",
         "extension/mp4-audio.mjs",
+        "extension/mp4-audio-range.mjs",
         "extension/audio-page.mjs",
         "extension/audio-download.mjs",
+        "scripts/audio-range.mjs",
     ]
     has_extension_core = root.joinpath("extension/core.js").exists()
     if has_extension_core:
@@ -78,6 +80,10 @@ def main() -> None:
         )
     else:
         print("\n==> JavaScript 单元测试：当前主线尚无 core.test.js，跳过", flush=True)
+
+    range_tests = root / "tests" / "audio-range.test.mjs"
+    if range_tests.exists():
+        check("音频选择下载实验测试", [node, "--test", str(range_tests.relative_to(root))])
 
     compile_targets = [
         name
