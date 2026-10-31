@@ -125,6 +125,10 @@ GET /courseapi/v3/web-socket/search-trans-result?sub_id={sub_id}&format=json
 
 7. **音频转写边界**：下载流程仅提取平台字幕或回放音轨，不自动执行语音识别。MacParakeet 是可选的外部转写工具，其 macOS 使用方式见 [docs/macparakeet.md](docs/macparakeet.md)；其他系统可自行选择 ASR 工具。
 
+### 音频选择下载实验
+
+`scripts/audio-range.mjs` 是独立的 Node.js 原型，通过 MP4 索引定位 AAC 样本，并使用 HTTP 多范围响应选择读取音轨。当前插件仍使用上述完整 MP4 读取流程。真实课程的响应体读取量从约 366 MB 降到 62 MB，AAC 数据与已归档音频一致；实现、取舍、复现命令和未验证场景见 [音频选择下载探索](docs/audio-download-exploration.md)。原型测试位于 `tests/audio-range.test.mjs`，由统一检查执行。
+
 ## 输入与文件路径安全
 
 课程 URL 仅接受受信任 HTTPS 域名、标准端口和 `/livingroom` 路径，拒绝用户名、密码、重复关键参数及非数字 ID。CLI 写文件前会再次验证 `sub_id`、清理课程名，并对三个最终路径调用 `resolve()` 后执行目录包含关系检查。扩展对 API 参数和 ZIP entry 中的 ID 执行同样的二次验证。

@@ -19,6 +19,7 @@ output/
 docs/*
 !docs/macparakeet.md
 !docs/transcription-notes.md
+!docs/audio-download-exploration.md
 
 # For Code Review
 .pr-review/
