@@ -23,6 +23,7 @@ docs/*
 !docs/macparakeet.md
 !docs/transcription-notes.md
 !docs/audio-download-exploration.md
+!docs/cli.md
 
 # For Code Review
 .pr-review/
