@@ -8,6 +8,7 @@ from datetime import datetime
 from .learning import preferences, review_candidates
 from .planner import TZ
 from .storage import terms
+from .tutoring import learning_gaps
 from ..telemetry import emit
 
 
@@ -133,8 +134,21 @@ def daily_plan(store, minutes=30, course="", now=None):
         candidates.append({"kind": "practice", "id": p["id"], "course": p["course"], "title": p["question"],
             "priority": 74, "minutes": 8, "reasons": ["这道题上次还没弄清楚（依据作答反馈或自评）"],
             "citations": p["citations"], "action": "针对刚才没讲清的条件换一道基础题，再回到原问题。" if local.date() == datetime.fromtimestamp(last.get("at", now), TZ).date() else "重述题目条件，试着独立作答，再核对上次遗漏的地方。"})
+    # WorkBuddy checkpoints carry student self-report, never an automatic grade.
+    # Existing spaced reviews own their schedule (including snoozes); do not add
+    # the same topic back through a second channel.
+    for gap in learning_gaps(store, now, course):
+        if any(r["course"] == gap["course"] and _related(r["topic"], gap["topic"]) for r in all_reviews):
+            continue
+        if any(c["course"] == gap["course"] and _related(c["title"], gap["topic"]) for c in candidates):
+            continue
+        candidates.append({"kind": "learning_gap", "id": gap["id"], "session_id": gap["session_id"],
+            "course": gap["course"], "title": gap["topic"], "priority": 74, "minutes": 8,
+            "reasons": ["你在最近的学习会话中表示仍有卡点（自评，不是自动判分）"],
+            "citations": gap["citations"], "action": "接着上次的问题试讲关键条件，再对照原文做一道变式题。"})
     calibration = False
-    if not candidates and not reviews and not store.list("practice"):
+    has_learning_feedback = any(not course or t["course"] == course for t in store.list("learning_topic"))
+    if not candidates and not reviews and not store.list("practice") and not has_learning_feedback:
         # Cold start: do not label a random recent topic as a weakness. One short
         # diagnostic gives the learner something to do without a setup questionnaire.
         sources = store.sources(course)
@@ -147,7 +161,7 @@ def daily_plan(store, minutes=30, course="", now=None):
             if e.get("policy", {}).get("excluded"):
                 continue
             candidates.append({"kind":"diagnostic", "id":s["id"], "course":s["course"], "title":"回忆“" + s["title"] + "”中的一个概念",
-                "priority":0, "minutes":5, "reasons":["还没有作答记录，先用一道题找到卡点"], "citations":[],
+                "priority":0, "minutes":5, "reasons":["还没有可用于排序的复习反馈，先用一道题确认当前状态"], "citations":[],
                 "action":"先做一道简短的回忆题。反馈后再决定剩余时间花在哪里。"})
             calibration = True
             break
