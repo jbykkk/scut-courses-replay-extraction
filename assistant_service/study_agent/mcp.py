@@ -13,6 +13,9 @@ from .daily import daily_plan
 from .research import search_public_references, read_public_reference, prepare_evidence_comparison
 from .tutoring import (VERSION, public_evidence, evidence_context, prepare_context,
                        list_materials, open_session, get_session, record_progress)
+from .concepts import list_concepts, prepare_term_practice, expand_query
+from .index_state import refresh_index
+from .boolean_check import verify_boolean_design
 from ..telemetry import execution, emit
 
 
@@ -45,6 +48,19 @@ TOOLS = [
     tool("read_study_evidence", "回查一个已检索到的来源片段；active=false 表示旧版本，不可当作最新通知。", {
         "evidence_id": {"type": "string", "minLength": 1, "maxLength": 80}}),
     tool("list_confirmed_study_tasks", "读取学生已确认且未完成的任务；不得自行补全空白截止日期。"),
+    tool("verify_boolean_design", "穷举1–6变量的两条布尔式，核对化简是否等价并给第一个反例和最小项集合。支持not/and/xor/or、撇号、*和+，乘积须显式连接。不执行代码，也不把布尔语法当VHDL语法或时序验证。", {
+        "variables":{"type":"array","minItems":1,"maxItems":6,"items":{"type":"string","minLength":1,"maxLength":16}},
+        "original":{"type":"string","minLength":1,"maxLength":500},
+        "candidate":{"type":"string","minLength":1,"maxLength":500}}),
+    tool("refresh_course_index", "把本课已保存但尚未进入索引的课堂记录同步为可检索来源。只更新本课索引，不重新转写、不调用模型、不改原记录或其他课程；找不到记录库会明确失败。", {
+        "course":{"type":"string","minLength":1,"maxLength":160}},readonly=False),
+    tool("list_course_concepts", "列本课有当前出处的术语、全称/别名/缩写及易混概念。每页20项；这是名称关联候选，不是完整考纲或掌握记录。", {
+        "course": {"type":"string","minLength":1,"maxLength":160},
+        "offset": {"type":"integer","minimum":0,"maximum":100000},
+        "query": {"type":"string","maxLength":160}}, required=["course"]),
+    tool("prepare_term_practice", "为一个已列出的concept_id返回有证据的名词解释、换名辨认和机制迁移题。每次只问一题等待作答，不自动给学生评分。", {
+        "course": {"type":"string","minLength":1,"maxLength":160},
+        "concept_id": {"type":"string","minLength":1,"maxLength":80}}),
     tool("prepare_learning_context", "为一个学习问题打包同课多来源原文、覆盖缺口、已确认要求和任务，可带session_id续接进度。无二次模型调用，不声称读完整课或看过板书。", {
         "course": {"type": "string", "minLength": 1, "maxLength": 160},
         "topic": {"type": "string", "minLength": 1, "maxLength": 500},
@@ -78,7 +94,7 @@ TOOLS = [
         required=["session_id", "request_id", "expected_revision", "topic", "evidence_ids"], readonly=False),
 ]
 for definition in TOOLS:
-    if definition["name"] in {"open_learning_session", "record_learning_progress"}:
+    if definition["name"] in {"open_learning_session", "record_learning_progress", "refresh_course_index"}:
         definition["annotations"]["idempotentHint"] = True
 
 
@@ -145,16 +161,22 @@ class Server:
         if name == "study_connection_status":
             return {"connected": True, "server_version": VERSION, "tools": len(TOOLS), "courses": len({s["course"] for s in self.store.sources()}),
                 "capabilities": {"learning_sessions": True, "context_neighbors": True, "local_progress": True,
-                                 "automatic_grading": False, "raw_file_access": False, "notification_send": False},
+                                 "automatic_grading": False, "raw_file_access": False, "notification_send": False,
+                                 "course_terminology": True, "term_wording_practice": True},
                 "web_service_required": False, "scope": "本地已索引课程；新录音由课堂助手同步。公开检索独立检查网络。"}
         handlers = {"search_public_references": search_public_references, "read_public_reference": read_public_reference,
             "prepare_evidence_comparison": prepare_evidence_comparison, "find_classroom_mentions": find_classroom_mentions,
             "plan_today_review": daily_plan, "prepare_learning_context": prepare_context,
             "read_study_evidence_context": evidence_context, "list_course_materials": list_materials, "open_learning_session": open_session,
-            "get_learning_session": get_session, "record_learning_progress": record_progress}
+            "get_learning_session": get_session, "record_learning_progress": record_progress,
+            "list_course_concepts": list_concepts, "prepare_term_practice": prepare_term_practice,
+            "refresh_course_index": refresh_index}
+        if name == 'verify_boolean_design':return verify_boolean_design(**args)
         if name in handlers: return handlers[name](self.store, **args)
         if name == "list_study_courses": return sorted({s["course"] for s in self.store.sources()})
-        if name == "search_course_sources": return [public_evidence(e) for e in self.store.search(args["query"], args["course"], limit=6)]
+        if name == "search_course_sources":
+            query=expand_query(self.store,args['course'],args['query'])['expanded_query']
+            return [public_evidence(e) for e in self.store.search(query, args["course"], limit=6)]
         if name == "read_study_evidence": return public_evidence(self.store.evidence(args["evidence_id"]))
         return [{k: t.get(k) for k in ("id", "course", "title", "deadline", "estimate_min", "estimate_max", "spent_minutes")}
                 for t in self.store.list("task") if t.get("status") == "accepted" and not t.get("completed")][:100]

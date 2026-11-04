@@ -5,7 +5,7 @@ display_name_en: SCUT Study
 description: 用 SCUT 百步梯课堂记录和本地资料查出处、接着上次学习、讲清知识联系、做练习与安排复习。学生提到老师在哪讲过、从零复习、继续学、课件与课堂冲突、公开论文核对或今天先学什么时使用。通过 scut-study MCP 按需取证和保存真实学习进度，不猜文件或课程内容。
 description_zh: 查课堂出处，接着上次学，用课件与文献核对概念，根据作答安排下一步。
 description_en: Evidence-grounded tutoring across lectures, resumable learning sessions and reviews based on explicit student feedback.
-version: 0.4.0
+version: 0.5.0
 author: PoesisQ
 examples_zh:
   - 从头讲神经科学，概念旁写英文，不要只给重点清单。
@@ -23,6 +23,7 @@ examples_zh:
 | 学生在做什么 | 先做什么 | 不顺带做什么 |
 | --- | --- | --- |
 | 查“老师在哪讲过” | `find_classroom_mentions`，必要时读相邻片段 | 不建学习会话，不扩成整课讲义 |
+| 数字电路、布尔化简或VHDL代码题 | 先读 `references/digital-design.md`，有界布尔式用 `verify_boolean_design` 复核 | 不把逻辑等价当作无毛刺或时序合格 |
 | 从头学、讲深一点、接着学、做练习 | 读 `references/learning-flow.md`，恢复或建立学习会话 | 不默认压成30分钟，不一次给完题和答案 |
 | 今天先学什么、只有若干分钟 | `plan_today_review` | 不编造期限，不把清单当已完成 |
 | 课堂与课件矛盾、要研究论文 | 读 `references/research-flow.md` | 不把检索命中当核验，不用外部论文推定考试范围 |
@@ -34,11 +35,12 @@ examples_zh:
 
 1. `find_classroom_mentions(course, query)` 查课时、原句和位置。工具已有的完整片段直接使用；缺少前提、否定或发言者转场时才 `read_study_evidence_context`。
 2. 先回答问题，再给必要原句、课时、时间与实际返回的回看链接。不自己拼 URL；`time_basis=capture` 是直播录音计时，不能当回放位置。
-3. 转写有误或只有相关铺垫时明确说本次检索范围。不把“未找到”写成“老师没讲”。当前版本失效或来源停用时重新检索。
+3. 检查结果中的 `classroom_index`；有已保存而未索引的课时先调用 `refresh_course_index(course)`，然后重检。该工具只同步本课已保存文字，不录音、不转写、不修改其他课程。
+4. 转写有误或只有相关铺垫时明确说本次检索范围。不把“未找到”写成“老师没讲”。当前版本失效或来源停用时重新检索。
 
 ## 连续学习与记忆
 
-使用 `get_learning_session` 续接目标、上次问题和学生回答；新目标才 `open_learning_session`。学习上下文用 `prepare_learning_context` 打包，不把全部字幕塞进对话。每轮围绕一条概念联系讲解，再出一道能暴露理解差异的题，等学生回答。
+使用 `get_learning_session` 续接目标、上次问题和学生回答；新目标才 `open_learning_session`。学习上下文用 `prepare_learning_context` 打包，不把全部字幕塞进对话。每轮围绕一条概念联系讲解，再出一道能暴露理解差异的题，等学生回答。用 `list_course_concepts` 查本课有出处的别名，`prepare_term_practice` 分别检验认名、定义和应用；相关概念不能当同义词。词表只是候选名称索引，不是已确认知识或完整考纲。
 
 `record_learning_progress` 保存实际讲过的主题、学生原始作答、明确自评及下一步建议。作答和自评都是学生报告，不是确认的知识或自动判分。学生没自评就省略 `self_rating`；“继续”不能推成满分。对新解释的确信不等于学生掌握。写入时复用当前 revision，用唯一 request_id；同一次重试保留 ID，冲突后重读，不覆盖新进度。
 
@@ -66,6 +68,6 @@ PPT同一图、相关示意图、字幕谈画图、实际板书画面、教师/�
 
 ## 边界与故障
 
-连接器目前有16个工具：能查询、取公开资料、保存学习会话与原始反馈；不能任意读文件、控制录音、发通知、批量转写或导出PDF。需要这些功能时提供本机学习助手 `http://127.0.0.1:8765/study.html`，不假装已经执行。回看百步梯时再到浏览器自行登录，不索要凭据。
+连接器目前有20个工具：能查询、取公开资料、保存学习会话与原始反馈、刷新本课文字索引及复核小型布尔式；不能任意读文件、控制录音、发通知、批量转写或导出PDF。需要这些功能时提供本机学习助手 `http://127.0.0.1:8765/study.html`，不假装已经执行。回看百步梯时再到浏览器自行登录，不索要凭据。
 
 连接失败核对MCP里的Python、脚本与资料目录；空检索先确认课程和索引范围。网络研究不可用时保留本地原句并说明缺口。来源更新要重新取证，不能静默沿用旧版。调用可以在学习助手运行详情回查；那里不展示模型内部思考。

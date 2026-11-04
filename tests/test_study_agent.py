@@ -146,7 +146,7 @@ class StudyTests(unittest.TestCase):
         self.assertEqual(len(responses), 4)
         tools = responses[1]["result"]["tools"]
         self.assertEqual({t["name"] for t in tools if not t["annotations"]["readOnlyHint"]},
-                         {"search_public_references", "read_public_reference", "open_learning_session", "record_learning_progress"})
+                         {"search_public_references", "read_public_reference", "open_learning_session", "record_learning_progress", "refresh_course_index"})
         self.assertTrue(all(not t["annotations"]["destructiveHint"] for t in tools))
         self.assertIn(e["id"], responses[2]["result"]["content"][0]["text"])
         self.assertEqual(responses[3]["error"]["code"], -32602)

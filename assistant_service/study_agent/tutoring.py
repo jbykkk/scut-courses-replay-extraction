@@ -12,8 +12,10 @@ from .classroom_search import location
 from .context import evidence_payload, pack_evidence, select_memory
 from .knowledge import catalog
 from .storage import digest
+from .concepts import expand_query, topic_key, catalog as concept_catalog
+from .index_state import index_status
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 MAX_CONTEXT = 16000
 
 
@@ -64,6 +66,7 @@ def _source_summary(store, course):
 
 def list_materials(store, course, offset=0):
     sources, coverage = _source_summary(store, course)
+    coverage['classroom_index']=index_status(store,course)
     result = []
     with store.connect() as db:
         for s in sources[offset:offset+20]:
@@ -82,8 +85,10 @@ def prepare_context(store, course, topic, session_id=""):
     if session and session["course"] != course:
         raise ValueError("不能把另一门课的学习会话混入当前上下文")
     sources, coverage = _source_summary(store, course)
+    coverage['classroom_index']=index_status(store,course)
     # Diversify before taking additional hits, so a transcript cannot crowd out slides.
-    hits = store.search(topic, course, 24)
+    terminology = expand_query(store, course, topic)
+    hits = store.search(terminology['expanded_query'], course, 24)
     first, extra, seen = [], [], set()
     for e in hits:
         (extra if e["source_id"] in seen else first).append(e)
@@ -96,7 +101,7 @@ def prepare_context(store, course, topic, session_id=""):
     requirements = [r for r in store.list("proposal") if r.get("course") == course
                     and r.get("proposal_kind") == "requirement" and r.get("status") == "accepted"]
     return {"course": course, "topic": topic, "session": session,
-            "coverage": coverage, "budget": budget,
+            "coverage": coverage, "budget": budget, "terminology": terminology,
             "sources": [{k: s[k] for k in ("id", "title", "kind", "fingerprint")} for s in sources[:24]],
             "sources_omitted": max(0, len(sources)-24),
             "evidence": [public_evidence(e) for e in candidates if e["id"] in ids],
@@ -108,6 +113,8 @@ def prepare_context(store, course, topic, session_id=""):
             "teaching_contract": {
                 "structure": "问题→前置概念→机制/推导→与前后知识的联系→反例/条件→一道题，等待学生",
                 "english": "概念引入和定义旁给英文，中文讲原理；缩写和章末词表不能替代",
+                "recognition": "先关联全称、别名、缩写，再分别检验名称识别、机制和迁移；不能因换名卡住就直接判定只是不认识词",
+                "worked_answers": "先给规则/公式依据，再推理、代入或逐步执行，最后核对单位、位宽、时序和条件；不用纯文本下划线冒充数学排版",
                 "model_bridge": ["解释的问题", "状态/输入/输出", "保留/丢失的信息", "近似和失效条件"],
                 "figure_axes": {"slide_match": "not_visually_checked", "board_image": "not_viewed",
                                 "speaker": "not_verified", "exam_requirement": "check_explicit_context"},
@@ -213,9 +220,14 @@ def learning_gaps(store, now, course=""):
     A later rating for the same course/topic supersedes the earlier one, including
     across sessions. An unrated explanation or generated checkpoint does not.
     """
-    gaps = []
+    gaps = [];latest={};catalogs={}
     for step in store.list("learning_topic"):
         if course and step["course"] != course: continue
+        c=step['course']
+        if c not in catalogs:catalogs[c]=concept_catalog(store,c)[0]
+        key=(c,topic_key(store,c,step['topic'],entries=catalogs[c]))
+        if key not in latest or step['at']>latest[key]['at']:latest[key]=step
+    for step in latest.values():
         if step["self_rating"] > 2 or now-step["at"] > 30*86400 or not step["evidence_ids"]: continue
         try:
             for eid in step["evidence_ids"]: _eligible(store, eid, step["course"])
