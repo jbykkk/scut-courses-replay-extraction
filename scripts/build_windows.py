@@ -29,7 +29,7 @@ def public_files(root=ROOT):
                 yield rel
     for name in ('config.py','subtitle.py','LICENSE','README.md','start-assistant.ps1','stop-assistant.ps1',
                  'register-launcher.ps1','register-native-launcher.ps1','install-desktop.ps1',
-                 'scripts/NativeLauncher.cs','scripts/DesktopLauncher.cs','scripts/study_mcp.py','scripts/prepare_workbuddy.py'):
+                 'scripts/NativeLauncher.cs','scripts/DesktopLauncher.cs','scripts/study_mcp.py','scripts/prepare_workbuddy.py','scripts/check_study_document.py'):
         yield Path(name)
 
 

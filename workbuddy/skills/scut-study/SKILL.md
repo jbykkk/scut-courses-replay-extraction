@@ -5,7 +5,7 @@ display_name_en: SCUT Study
 description: 用 SCUT 百步梯课堂记录和本地资料查出处、接着上次学习、讲清知识联系、做练习与安排复习。学生提到老师在哪讲过、从零复习、继续学、课件与课堂冲突、公开论文核对或今天先学什么时使用。通过 scut-study MCP 按需取证和保存真实学习进度，不猜文件或课程内容。
 description_zh: 查课堂出处，接着上次学，用课件与文献核对概念，根据作答安排下一步。
 description_en: Evidence-grounded tutoring across lectures, resumable learning sessions and reviews based on explicit student feedback.
-version: 0.5.1
+version: 0.5.2
 author: PoesisQ
 examples_zh:
   - 从头讲神经科学，概念旁写英文，不要只给重点清单。
@@ -54,7 +54,9 @@ examples_zh:
 
 ## 讲解与证据
 
-深入讲解、串联、出题或作图时，按 `references/teaching-evidence.md`：问题→前置概念→机制/推导→前后联系→适用条件/反例→练习。换模型时说明解释什么、状态/输入/输出、保留/丢失什么、何时失效。英语课程在概念首次引入与定义旁给英文；按学生明确的语言选择调整，不只在章末堆词表。
+深入讲解、串联、出题或作图时，按 `references/teaching-evidence.md`。正文用连续段落展开：已有结论还缺什么，新概念为何出现，例子如何推出结论，又怎样引出下一步。模型的输入、状态和假设在需要处解释，不强制拆成标签清单。复用情境和符号，词表与出处索引放到讲述之后。英语随概念首次引入；练习只按当前意愿提供。
+
+编写讲义、Markdown或PDF时先读 `references/document-format.md`。数学、正文和代码分别处理：公式真实渲染后才称排版通过，代码保留字面与缩进，不能用全局替换修补。连接器没有导出工具时，给出可用正文和实际导出入口，不能伪称已经运行排版检查。
 
 PPT同一图、相关示意图、字幕谈画图、实际板书画面、教师/学生发言、考试要求分别核对。工具返回文本不代表已经看过原图。缺少画面就说未核实，不能把学生汇报当教师板书；自编例子、图和推导就地标注。
 

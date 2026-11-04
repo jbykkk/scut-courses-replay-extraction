@@ -176,7 +176,7 @@ class WorkBuddyLearningTests(unittest.TestCase):
         args={"session_id":s["id"],"request_id":"bad","expected_revision":True,"topic":"x","evidence_ids":[]}
         self.assertEqual(call("record_learning_progress",args)["error"]["code"],-32602)
         status=json.loads(call("study_connection_status",{})["result"]["content"][0]["text"])
-        self.assertEqual(status["server_version"],"0.5.1")
+        self.assertEqual(status["server_version"],"0.5.2")
         self.assertFalse(status["capabilities"]["automatic_grading"])
 
     def test_mcp_learning_flow_can_resume_and_plan_without_a_second_model(self):

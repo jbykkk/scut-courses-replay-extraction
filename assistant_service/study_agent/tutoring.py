@@ -15,7 +15,7 @@ from .storage import digest
 from .concepts import expand_query, topic_key, catalog as concept_catalog
 from .index_state import index_status
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 MAX_CONTEXT = 16000
 
 
@@ -112,6 +112,10 @@ def prepare_context(store, course, topic, session_id=""):
                                        for r in select_memory(requirements, topic, 4)],
             "next_action": "teach_one_connection" if packed else "clarify_sources_or_topic",
             "teaching_contract": {
+                "narrative": "用连续段落讲清旧结论为何不够、新概念怎样解决问题、示例怎样推出下一步；跨段复用同一情境和符号。清单只用于步骤/对比/查阅，不能把正文切成定义堆；首次英文随概念出现，词表和来源索引放在讲述之后。",
+                "document_format": {"version": "study-markdown-1", "math": "行内$...$；块公式用独立行$$；上下标用花括号，函数名/单位用\\mathrm或\\text。JSON解码后LaTeX仅一层反斜杠。",
+                                    "code": "围栏注明语言，保持缩进和<=、:=、下划线；代码不参与数学替换。",
+                                    "validation": "导出前运行check_study_document.py，含数学再做实际本地渲染；渲染失败、源码泄漏或超宽不能标为成功。数学排版通过不等于公式在知识上正确。"},
                 "structure": "问题→前置概念→机制/推导→与前后知识的联系→讲完示例与边界，继续后续内容" if explain_only else "问题→前置概念→机制/推导→与前后知识的联系→反例/条件→一道题，等待学生",
                 "assessment": {"teaching_mode": session["teaching_mode"] if session else "interactive",
                                "ask_for_answer": not explain_only,

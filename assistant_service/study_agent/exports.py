@@ -4,9 +4,11 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 import re
+import tempfile
 from xml.sax.saxutils import escape
 
 from .planner import TZ
+from .document_format import inspect_document
 
 
 def pack_markdown(store, course, topic, results):
@@ -51,6 +53,10 @@ def pack_markdown(store, course, topic, results):
 
 
 def write_pdf(text, destination):
+    inspected=inspect_document(text)
+    if inspected['requires_browser']:
+        from .math_renderer import render_document
+        return render_document(text,destination)
     try:
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
@@ -96,13 +102,21 @@ def write_pdf(text, destination):
 def save_pack(store, root, jid, course, topic, results, formats):
     folder = Path(root) / "study-exports"; folder.mkdir(exist_ok=True)
     text = pack_markdown(store, course, topic, results)
+    inspected=inspect_document(text)
+    if 'pdf' not in formats and inspected['math']:
+        from .math_renderer import render_document
+        render_document(text)  # Validate syntax in the actual renderer before publishing Markdown.
+    if any(fmt not in {'md','pdf'} for fmt in formats):raise ValueError("仅支持 PDF 和 Markdown")
     files = []
-    for fmt in formats:
-        name = jid + "." + fmt
-        path = folder / name
-        if fmt == "md": path.write_text(text, encoding="utf-8")
-        elif fmt == "pdf": write_pdf(text, path)
-        else: raise ValueError("仅支持 PDF 和 Markdown")
-        files.append({"name": course + ("复习题" if any(r.get("exercise") for r in results) else "复习资料") + "." + fmt,
-                      "file": name, "format": fmt})
+    # Finish every format before publishing any file, including a Markdown-first
+    # request whose PDF subsequently fails. Temporary outputs are removed on error.
+    with tempfile.TemporaryDirectory(prefix='render-',dir=folder) as staging:
+        for fmt in dict.fromkeys(formats):
+            name = jid + "." + fmt
+            path = Path(staging) / name
+            if fmt == "md": path.write_text(text, encoding="utf-8")
+            else: write_pdf(text, path)
+            files.append({"name": course + ("复习题" if any(r.get("exercise") for r in results) else "复习资料") + "." + fmt,
+                          "file": name, "format": fmt})
+        for item in files:(Path(staging)/item['file']).replace(folder/item['file'])
     return files

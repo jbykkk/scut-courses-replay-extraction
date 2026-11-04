@@ -2,7 +2,7 @@
 
 用一句话查课堂出处、接着上次学，或拿课件和论文对照课堂说法。学习目标、实际作答和自评保存在本机；WorkBuddy 按需读取相关片段，用自己的模型讲解和提问，不再套一遍 DeepSeek。
 
-当前版本 **0.5.1 / 20个工具**。流程与记忆设计见 [WorkBuddy Agent 设计](../planning/WORKBUDDY_AGENT.md)，技能入口是 [SKILL.md](skills/scut-study/SKILL.md)。
+当前版本 **0.5.2 / 20个工具**。流程与记忆设计见 [WorkBuddy Agent 设计](../planning/WORKBUDDY_AGENT.md)，技能入口是 [SKILL.md](skills/scut-study/SKILL.md)。
 
 ## 本机接入
 
@@ -16,7 +16,7 @@
 
 脚本把 `scut-study` 合并到 `%USERPROFILE%\.workbuddy\mcp.json`，把技能及 `references/` 规程一起安装到 `skills/scut-study/`。已有连接器保留，变更文件先备份；遇到同名的其他程序会停下，不覆盖。生成文件含本机路径，保存在数据目录的 `workbuddy/`，不要提交 GitHub。
 
-在 WorkBuddy 的“专家·技能·连接器 → 连接器 → 自定义”检查 `scut-study`。客户端尚未加载时，用“添加 MCP”的 JSON 编辑器检查并保存生成的配置。如果出现信任或权限提示，请自己核对后操作。文件已写入不代表客户端已连接，最终应看到 **20 个工具**，且连接检查返回 **0.5.1**。旧会话仍显示10个工具时，重新连接该连接器，再新开对话加载技能，不用重启正在录音的扩展或课堂服务。
+在 WorkBuddy 的“专家·技能·连接器 → 连接器 → 自定义”检查 `scut-study`。客户端尚未加载时，用“添加 MCP”的 JSON 编辑器检查并保存生成的配置。如果出现信任或权限提示，请自己核对后操作。文件已写入不代表客户端已连接，最终应看到 **20 个工具**，且连接检查返回 **0.5.2**。旧会话仍显示10个工具时，重新连接该连接器，再新开对话加载技能，不用重启正在录音的扩展或课堂服务。
 
 新建对话后可以这样说：
 
@@ -133,3 +133,12 @@ WorkBuddy 负责启动 MCP 进程。查已有资料时不需要先开学习网�
 ## 平台依据
 
 采用官方 [MCP + Skill](https://open.workbuddy.cn/docs/connector) 接入方式，工具由本地 stdio 进程提供，不把课堂服务暴露到公网。技能格式见[官方说明](https://open.workbuddy.cn/docs/skill)。若之后部署固定角色团队，按[专家团规范](https://open.workbuddy.cn/docs/expert-team)配置，并以实际客户端工具权限为准。
+
+
+## 0.5.2：连续讲解与可打印公式
+
+学习上下文增加连续讲述和 `study-markdown-1` 格式约定：前面的问题为什么需要下一个概念、示例怎样推出结论，要在段落之间说明。词表、原页覆盖和证据细目供回查，不用它们分割正文；只讲解时继续保留explain模式。
+
+Markdown/PDF详规见[数学与代码格式](../planning/DOCUMENT_FORMAT.md)。学习助手的导出现在将数学与代码分开解析，数学走本地KaTeX实际检查；代码/表格PDF保持结构，失败会定位行号并停止发布。WorkBuddy连接器仍是20个工具，本轮没有增加PDF导出工具，不能仅凭技能文案声称已导出。
+
+本轮258项Python及现有JavaScript、编译、格式检查通过；实际stdio验证0.5.2、explain续接和新约定。真实客户端对话本轮未复测，记录见[验证记录](VALIDATION.md)。
