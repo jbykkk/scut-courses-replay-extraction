@@ -1,4 +1,5 @@
 import tempfile
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -89,6 +90,42 @@ $$
                  patch('assistant_service.study_agent.math_renderer.render_document',side_effect=DocumentFormatError('bad math')):
                 with self.assertRaises(DocumentFormatError):save_pack(None,folder,'job2','course','topic',[],['md'])
             self.assertEqual(list((Path(folder)/'study-exports').iterdir()),[])
+
+    @unittest.skipUnless(os.getenv('SCUT_RENDER_INTEGRATION')=='1','requires local headless browser')
+    def test_real_browser_writes_readable_math_and_code_pdf(self):
+        from assistant_service.study_agent.math_renderer import render_document
+        from pypdf import PdfReader
+        source=r'''# Math export
+Steady value $u_{\infty}=RI$.
+
+$$
+\frac{1}{1+x^{2}}
+$$
+
+```vhdl
+  q_next <= a_b & c;
+  v := 1;
+```
+'''
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'printed.pdf'
+            report=render_document(source,path)
+            self.assertEqual(report['errors'],[])
+            self.assertTrue(path.read_bytes().startswith(b'%PDF-'))
+            extracted='\n'.join(page.extract_text() for page in PdfReader(path).pages)
+            self.assertIn('q_next <= a_b & c;',extracted)
+            self.assertIn('v := 1;',extracted)
+            self.assertNotIn(r'\frac',extracted)
+            self.assertNotIn(r'u_{\infty}',extracted)
+
+    @unittest.skipUnless(os.getenv('SCUT_RENDER_INTEGRATION')=='1','requires local headless browser')
+    def test_real_browser_rejects_invalid_latex_without_pdf(self):
+        from assistant_service.study_agent.math_renderer import render_document
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'bad.pdf'
+            with self.assertRaisesRegex(DocumentFormatError,'第3行'):
+                render_document('# Broken\n\n$\\notARealMathCommand{x}$',path)
+            self.assertFalse(path.exists())
 
 
 if __name__=='__main__':unittest.main()

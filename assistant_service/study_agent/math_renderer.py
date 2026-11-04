@@ -51,7 +51,7 @@ def _render(page_html,destination):
                 error=report['errors'][0]
                 raise DocumentFormatError(f"第{error['line']}行公式排版失败：{error['message']}")
             if destination is not None:
-                page.pdf(path=str(destination),format='A4',print_background=True,prefer_css_page_size=True,timeout=30000,
+                page.pdf(path=str(destination),format='A4',print_background=True,prefer_css_page_size=True,
                          display_header_footer=True,header_template='<span></span>',
                          footer_template='<div style="width:100%;font-size:9px;color:#75857f;padding:0 18mm">SCUT · 学习资料<span class="pageNumber" style="float:right"></span></div>')
             return report

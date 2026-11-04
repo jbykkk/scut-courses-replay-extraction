@@ -141,4 +141,4 @@ WorkBuddy 负责启动 MCP 进程。查已有资料时不需要先开学习网�
 
 Markdown/PDF详规见[数学与代码格式](../planning/DOCUMENT_FORMAT.md)。学习助手的导出现在将数学与代码分开解析，数学走本地KaTeX实际检查；代码/表格PDF保持结构，失败会定位行号并停止发布。WorkBuddy连接器仍是20个工具，本轮没有增加PDF导出工具，不能仅凭技能文案声称已导出。
 
-本轮258项Python及现有JavaScript、编译、格式检查通过；实际stdio验证0.5.2、explain续接和新约定。真实客户端对话本轮未复测，记录见[验证记录](VALIDATION.md)。
+本轮260项Python及现有JavaScript、编译、格式检查通过；实际stdio验证0.5.2、explain续接和新约定。真实客户端对话本轮未复测，记录见[验证记录](VALIDATION.md)。
