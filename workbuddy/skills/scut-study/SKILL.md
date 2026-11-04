@@ -5,7 +5,7 @@ display_name_en: SCUT Study
 description: 用 SCUT 百步梯课堂记录和本地资料查出处、接着上次学习、讲清知识联系、做练习与安排复习。学生提到老师在哪讲过、从零复习、继续学、课件与课堂冲突、公开论文核对或今天先学什么时使用。通过 scut-study MCP 按需取证和保存真实学习进度，不猜文件或课程内容。
 description_zh: 查课堂出处，接着上次学，用课件与文献核对概念，根据作答安排下一步。
 description_en: Evidence-grounded tutoring across lectures, resumable learning sessions and reviews based on explicit student feedback.
-version: 0.5.0
+version: 0.5.1
 author: PoesisQ
 examples_zh:
   - 从头讲神经科学，概念旁写英文，不要只给重点清单。
@@ -40,7 +40,7 @@ examples_zh:
 
 ## 连续学习与记忆
 
-使用 `get_learning_session` 续接目标、上次问题和学生回答；新目标才 `open_learning_session`。学习上下文用 `prepare_learning_context` 打包，不把全部字幕塞进对话。每轮围绕一条概念联系讲解，再出一道能暴露理解差异的题，等学生回答。用 `list_course_concepts` 查本课有出处的别名，`prepare_term_practice` 分别检验认名、定义和应用；相关概念不能当同义词。词表只是候选名称索引，不是已确认知识或完整考纲。
+使用 `get_learning_session` 续接目标、上次问题和学生回答；新目标才 `open_learning_session`。学习上下文用 `prepare_learning_context` 打包，不把全部字幕塞进对话。尊重本次明确学习方式。只讲解时用teaching_mode=explain建立会话；已有会话用record_learning_progress保存该模式，恢复后继续讲解、直接展开示例，不出题或要求自评。只有学生主动要求练习才切回interactive，再每次出一道题等待回答。用 `list_course_concepts` 查本课有出处的别名，学生愿意练习时用 `prepare_term_practice` 分别检验认名、定义和应用；相关概念不能当同义词。词表只是候选名称索引，不是已确认知识或完整考纲。
 
 `record_learning_progress` 保存实际讲过的主题、学生原始作答、明确自评及下一步建议。作答和自评都是学生报告，不是确认的知识或自动判分。学生没自评就省略 `self_rating`；“继续”不能推成满分。对新解释的确信不等于学生掌握。写入时复用当前 revision，用唯一 request_id；同一次重试保留 ID，冲突后重读，不覆盖新进度。
 
@@ -64,7 +64,7 @@ PPT同一图、相关示意图、字幕谈画图、实际板书画面、教师/�
 
 一次打包优先，复用已返回原文；一轮最多补读三份相关片段，确有缺口才改一个术语再检索。整课按章节分轮取材，不能把本轮八段称为全部课程。只传问题、证据ID和待核对点，不递归复制对话或启动角色团队。只有实质冲突且宿主支持时，按研究规程增加一次独立复核。
 
-先讲清具体问题和因果，再放出处和下一步。工具名和执行流水留在运行记录，不写成面向学生的口号。限制集中说明一次，不列空标题；不编“必考”“已经掌握”。给练习时先出题，提示与答案按需要再给。
+先讲清具体问题和因果，再放出处和下一步。工具名和执行流水留在运行记录，不写成面向学生的口号。限制集中说明一次，不列空标题；不编“必考”“已经掌握”。只讲解时示例直接讲完；学生选择练习时才先出题，提示与答案按需要再给。
 
 ## 边界与故障
 

@@ -75,7 +75,8 @@ TOOLS = [
         "course": {"type": "string", "minLength": 1, "maxLength": 160},
         "goal": {"type": "string", "minLength": 1, "maxLength": 500},
         "request_id": {"type": "string", "minLength": 1, "maxLength": 80},
-        "language": {"type": "string", "enum": ["bilingual", "zh", "en"], "maxLength": 10}},
+        "language": {"type": "string", "enum": ["bilingual", "zh", "en"], "maxLength": 10},
+        "teaching_mode": {"type": "string", "enum": ["interactive", "explain"], "maxLength": 11}},
         required=["course", "goal", "request_id"], readonly=False),
     tool("get_learning_session", "恢复同课学习进度。传session_id读取一项；不传返回最近3项供按目标选择。标出来源失效与自报性质，不自动认定掌握。", {
         "course": {"type": "string", "minLength": 1, "maxLength": 160},
@@ -90,6 +91,7 @@ TOOLS = [
         "student_answer": {"type": "string", "maxLength": 4000},
         "self_rating": {"type": "integer", "minimum": 1, "maximum": 4},
         "next_question": {"type": "string", "maxLength": 500},
+        "teaching_mode": {"type": "string", "enum": ["interactive", "explain"], "maxLength": 11},
         "action": {"type": "string", "enum": ["checkpoint", "pause", "resume"], "maxLength": 10}},
         required=["session_id", "request_id", "expected_revision", "topic", "evidence_ids"], readonly=False),
 ]

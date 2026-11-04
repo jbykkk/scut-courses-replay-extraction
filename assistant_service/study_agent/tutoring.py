@@ -15,7 +15,7 @@ from .storage import digest
 from .concepts import expand_query, topic_key, catalog as concept_catalog
 from .index_state import index_status
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 MAX_CONTEXT = 16000
 
 
@@ -84,6 +84,7 @@ def prepare_context(store, course, topic, session_id=""):
     session = session_view(store, session_id) if session_id else None
     if session and session["course"] != course:
         raise ValueError("不能把另一门课的学习会话混入当前上下文")
+    explain_only = bool(session and session["teaching_mode"] == "explain")
     sources, coverage = _source_summary(store, course)
     coverage['classroom_index']=index_status(store,course)
     # Diversify before taking additional hits, so a transcript cannot crowd out slides.
@@ -111,9 +112,12 @@ def prepare_context(store, course, topic, session_id=""):
                                        for r in select_memory(requirements, topic, 4)],
             "next_action": "teach_one_connection" if packed else "clarify_sources_or_topic",
             "teaching_contract": {
-                "structure": "问题→前置概念→机制/推导→与前后知识的联系→反例/条件→一道题，等待学生",
+                "structure": "问题→前置概念→机制/推导→与前后知识的联系→讲完示例与边界，继续后续内容" if explain_only else "问题→前置概念→机制/推导→与前后知识的联系→反例/条件→一道题，等待学生",
+                "assessment": {"teaching_mode": session["teaching_mode"] if session else "interactive",
+                               "ask_for_answer": not explain_only,
+                               "instruction": "学生选择只讲解：直接展开示例，不出题、不等作答、不编自评；不为讲解追问日期或限时" if explain_only else "按学生当前意愿选择练习；若只想听讲，先保存explain模式"},
                 "english": "概念引入和定义旁给英文，中文讲原理；缩写和章末词表不能替代",
-                "recognition": "先关联全称、别名、缩写，再分别检验名称识别、机制和迁移；不能因换名卡住就直接判定只是不认识词",
+                "recognition": "把全称、别名、缩写与机制直接讲清，不要求学生作答" if explain_only else "先关联全称、别名、缩写，再分别检验名称识别、机制和迁移；不能因换名卡住就直接判定只是不认识词",
                 "worked_answers": "先给规则/公式依据，再推理、代入或逐步执行，最后核对单位、位宽、时序和条件；不用纯文本下划线冒充数学排版",
                 "model_bridge": ["解释的问题", "状态/输入/输出", "保留/丢失的信息", "近似和失效条件"],
                 "figure_axes": {"slide_match": "not_visually_checked", "board_image": "not_viewed",
@@ -135,10 +139,11 @@ def _put(db, kind, item, eid):
     return value
 
 
-def open_session(store, course, goal, request_id, language="bilingual"):
+def open_session(store, course, goal, request_id, language="bilingual", teaching_mode="interactive"):
+    if teaching_mode not in {"interactive", "explain"}:raise ValueError("教学方式须为interactive或explain")
     if not _source_summary(store, course)[0]: raise ValueError("当前课程没有可用来源，请先确认课程或导入资料")
     sid = "lesson-" + digest(["open-learning-session", request_id])[:32]
-    signature = digest([course, goal, language])
+    signature = digest([course, goal, language]+([teaching_mode] if teaching_mode!="interactive" else []))
     with store.connect() as db:
         db.execute("BEGIN IMMEDIATE")
         row = db.execute("SELECT data FROM entities WHERE id=? AND kind='learning_session'", (sid,)).fetchone()
@@ -146,7 +151,7 @@ def open_session(store, course, goal, request_id, language="bilingual"):
             if json.loads(row[0])["request_signature"] != signature:
                 raise ValueError("该request_id已用于另一项学习请求，请保留原请求或使用新ID")
         else:
-            _put(db, "learning_session", {"course": course, "goal": goal, "language": language,
+            _put(db, "learning_session", {"course": course, "goal": goal, "language": language, "teaching_mode": teaching_mode,
                  "request_signature": signature, "revision": 0, "status": "active", "recent_steps": [],
                  "created_at": time.time()}, sid)
     return session_view(store, sid)
@@ -167,6 +172,7 @@ def session_view(store, session_id):
                          "rating_origin": "student_self_report" if step.get("self_rating") else "not_provided",
                          "next_question_origin": "assistant_suggestion"})
     return {k: item[k] for k in ("id", "course", "goal", "language", "revision", "status", "updated_at")} | {
+        "teaching_mode": item.get("teaching_mode", "interactive"),
         "recent_steps": recent, "stale_evidence_ids": sorted(stale),
         "needs_source_refresh": bool(stale), "knowledge_confirmed": False}
 
@@ -182,10 +188,12 @@ def get_session(store, course, session_id=""):
 
 
 def record_progress(store, session_id, request_id, expected_revision, topic, evidence_ids,
-                    question="", student_answer="", self_rating=None, next_question="", action="checkpoint"):
+                    question="", student_answer="", self_rating=None, next_question="", action="checkpoint", teaching_mode=""):
+    if teaching_mode not in {"", "interactive", "explain"}:raise ValueError("教学方式须为interactive或explain")
     event_id = "step-" + digest([session_id, request_id])[:32]
     payload = {"topic": topic, "evidence_ids": list(dict.fromkeys(evidence_ids)), "question": question,
                "student_answer": student_answer, "self_rating": self_rating, "next_question": next_question, "action": action}
+    if teaching_mode:payload["teaching_mode"]=teaching_mode
     signature = digest(payload)
     with store.connect() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -210,6 +218,7 @@ def record_progress(store, session_id, request_id, expected_revision, topic, evi
                      ("course", "session_id", "topic", "self_rating", "at", "evidence_ids")} | {"step_id": event_id}, tid)
             item.update(revision=item["revision"]+1, status="paused" if action == "pause" else "active",
                         recent_steps=(item["recent_steps"] + [event_id])[-12:])
+            if teaching_mode:item["teaching_mode"]=teaching_mode
             _put(db, "learning_session", item, session_id)
     return session_view(store, session_id)
 
