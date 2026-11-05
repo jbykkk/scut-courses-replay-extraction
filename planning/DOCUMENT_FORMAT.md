@@ -1,6 +1,6 @@
 # 学习资料的数学与代码格式
 
-对应 EDU-12、EDU-13。此文件是 `study-markdown-1` 格式约定。公开示例均为自编，不含课程原文。配套实现位于 `assistant_service/study_agent/document_format.py`、`math_renderer.py` 与 `exports.py`；Skill 的 `references/document-format.md` 同步本文件。
+对应 EDU-12、EDU-13 和 EDU-16。此文件是 `study-markdown-1` 格式约定。公开示例均为自编。配套实现位于 `assistant_service/study_agent/document_format.py`、`math_renderer.py` 与 `exports.py`。Skill 的 `references/document-format.md` 同步本文件。
 
 ## 从文字稿到打印稿
 
@@ -32,6 +32,10 @@ JSON中的反斜杠需多转义一层：JSON源码 `"$u_{\\infty}$"` 解码后�
 完整代码使用注明语言的围栏，如 `vhdl`、`python`、`c`。程序标识符和运算符用行内代码：`q_next`、`<=`、`:=`、`&`。保留空格缩进、字面下划线、引号与符号；不要把代码里的 `$` 当公式，也不要把 `<=` 转成排版箭头后写回源稿。打印用代码行宜控制在80–90字符，过长时在语言允许处手动断行，不修改表达式含义。
 
 原课件代码如有错，原文与修正版分开。可运行完整代码注明版本、库和检查范围；非法反例要就地标明，不计入“全部编译通过”。
+
+## 图解讲义的配图
+
+人工制作的图解讲义使用独立本地图片目录。Markdown以 `![简明图意](figures/figure-01.png)` 引用相对路径，文件移动时保留与图片目录的相对位置。图和下一段图注一起放在讲解处，图注包含原课件PDF页、节选身份和读图线索。由支持本地图片的排版链路嵌入同一图到PDF，发布前逐个核对图链、图注、裁切、清晰度和跨页。项目浏览器导出器的数学和代码检查可以单独用于配图稿。图像嵌入和图片交付由图解讲义的构建环节核验。
 
 ## 实际检查与失败处理
 

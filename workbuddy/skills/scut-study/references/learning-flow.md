@@ -4,6 +4,8 @@
 
 先从学生的话确定课程和当前目标。课程不清只问一个必要问题；目标已有就不再询问考试日、预算、全部教材。要求完整从零学习时，调用 `list_course_materials`，按 `next_offset` 读取后续目录，建立暂定主题顺序；目录只表示可用文件，不等于已读全文。返回的 `coverage.classroom_index` 若提示新课时，先 `refresh_course_index(course)` 再列目录或取上下文；只刷新一门已明确课程，不开始转录。不要将日期顺序当作知识结构，也不要强制一课时对应一个PPT。
 
+交付多章稿时，将这条主题顺序写给读者。用一个贯穿问题讲清各章为什么排在这里，在章首先说本章如何从已有结果走到新结论。课堂记录里有展开的推导或逐行例题时，将具体片段定位到正文。若课件原图能交代接线或时序，核对图后紧跟相关段落嵌入，并写读图时应先找哪里。详见 `teaching-evidence.md` 与 `document-format.md`。
+
 1. `get_learning_session(course)` 找最近目标；指定会话只取该项。按当前问题选择，不能默认第一项必然正确。
 2. 有匹配会话则继续；没有才 `open_learning_session(course, goal, request_id, language)`。request_id 为本次动作唯一的短ID，同一调用失败重试保留原ID，新的动作使用新ID。不要在不同对话重复用 `start-1` 之类常量。语言默认 bilingual；学生明确要中文/英文时用 zh/en。学生说不用做题/只听讲时，teaching_mode传explain；主动练习才使用interactive。已有会话可在记录当前明确偏好时更新teaching_mode，不填学生未提供的答案或自评。
 3. 状态 paused 时，学生本次明确要继续才写 resume。来源 `needs_source_refresh` 时先重检，旧证据不充当当前事实。
