@@ -1,0 +1,11 @@
+{
+  "name": "scut-markmap-vendor",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": {
+    "markmap-lib": "0.18.12",
+    "markmap-view": "0.18.12"
+  },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

@@ -6,9 +6,14 @@ import json
 import re
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from pathlib import Path
 
-from .analysis import Analyzer, AnalysisPaused, analysis_packs, merge_events, rule_events
+from .analysis import Analyzer, AnalysisPaused, NOTES_PROMPT_VERSION, analysis_packs, merge_events, rule_events
+from .lecture_materials import material_context, selected_materials
+from .courseware import CoursewareAlignment
+from .study_agent.storage import StudyStore
 from .settings import atomic_json
 from .asr import Transcriber, validate_wav, repetitive_segments
 from .media import Downloader, decode, split_wav
@@ -47,32 +52,63 @@ class Manager:
         self.asr = transcriber or Transcriber(settings)
         self.analyzer = analyzer or Analyzer(settings)
         self.mobile = MobileNotifier(settings, store)
+        self.courseware = CoursewareAlignment(settings, store, getattr(self.analyzer, "transport", None))
         self.shutdown = threading.Event()
         self.threads = []
         self.last_finalize = 0
+        self.worker_lock = threading.RLock()
+        self.started = False
+
+    def llm_stamp(self):
+        llm = self.settings.llm()
+        return f"{llm['provider']}:{llm['model']}"
 
     def start(self):
-        # One resident GPU recognizer avoids duplicate VRAM use. Downloads and
-        # DeepSeek requests are independent and can make progress concurrently.
-        for lane, count in {"asr": 1, "media": 2, "analysis": 2}.items():
-            for index in range(count):
-                thread = threading.Thread(target=self.worker, args=(lane,), daemon=True,
-                                          name=f"scut-{lane}-{index + 1}")
-                thread.start()
-                self.threads.append(thread)
+        self.started = True
+        self.courseware.queue()
+        self.configure_workers()
         self.mobile.start()
+
+    def concurrency(self, key, default, maximum):
+        try:
+            return max(1, min(maximum, int(self.settings.data.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    def worker_count(self, lane):
+        return {"asr": self.concurrency("asr_workers", 4, 8), "media": 2,
+                "analysis": self.concurrency("analysis_workers", 4, 8), "alignment": 1}[lane]
+
+    def configure_workers(self):
+        # Grow immediately; lowering a limit parks surplus workers after their
+        # current job, without interrupting an in-flight paid request.
+        with self.worker_lock:
+            if not self.started or self.shutdown.is_set():
+                return
+            names = {t.name for t in self.threads}
+            for lane in ("asr", "media", "analysis", "alignment"):
+                for index in range(self.worker_count(lane)):
+                    name = f"scut-{lane}-{index + 1}"
+                    if name not in names:
+                        thread = threading.Thread(target=self.worker, args=(lane, index), daemon=True, name=name)
+                        self.threads.append(thread)
+                        thread.start()
 
     def close(self):
         self.shutdown.set()
         self.mobile.close()
+        self.courseware.close()
         if hasattr(self.analyzer, "close"):
             self.analyzer.close()
         if hasattr(self.asr, "close"):
             self.asr.close()
 
-    def worker(self, lane):
+    def worker(self, lane, index=0):
         recent_sessions = set()
         while not self.shutdown.is_set():
+            if index >= self.worker_count(lane):
+                self.shutdown.wait(0.4)
+                continue
             job = self.store.claim(lane, exclude_sessions=recent_sessions)
             if not job and recent_sessions:
                 recent_sessions.clear()
@@ -85,6 +121,54 @@ class Manager:
             self.execute(job)
             recent_sessions.add(job["session_id"])
             self.finalize()
+
+    def analyze_packs(self, packs, completed, analyze, check, parallelism):
+        """Fetch independently; the caller alone commits checkpoints and ordered notes."""
+        missing = []
+        for index, pack in enumerate(packs):
+            if str(index) in completed:
+                yield index, completed[str(index)]
+            else:
+                missing.append((index, pack))
+        if parallelism == 1:
+            for index, pack in missing:
+                check()
+                yield index, analyze(pack)
+            return
+        remaining = iter(missing)
+        pending, failure = {}, None
+        with ThreadPoolExecutor(max_workers=parallelism, thread_name_prefix="scut-notes-part") as pool:
+            def fill():
+                while len(pending) < parallelism:
+                    check()
+                    item = next(remaining, None)
+                    if item is None:
+                        break
+                    index, pack = item
+                    pending[pool.submit(copy_context().run, analyze, pack)] = index
+            try:
+                fill()
+                while pending:
+                    ready, _ = wait(pending, return_when=FIRST_COMPLETED)
+                    successful = []
+                    for future in ready:
+                        index = pending.pop(future)
+                        try:
+                            successful.append((index, future.result()))
+                        except Exception as exc:
+                            if failure is None:
+                                failure = exc
+                    for item in successful:
+                        yield item
+                    # Finish and save already-running work on failure, then retry
+                    # only missing parts. Never submit the rest of the lecture.
+                    if failure is None:
+                        fill()
+                if failure is not None:
+                    raise failure
+            finally:
+                for future in pending:
+                    future.cancel()
 
     def execute(self, job):
         sid, lane = job["session_id"], job["lane"]
@@ -104,6 +188,10 @@ class Manager:
             else:
                 error = str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}：处理失败，请检查本地配置后重试"
             self.store.finish(job["id"], error)
+            if lane == "alignment":
+                self.store.update(sid, alignment_status="failed", alignment_error=error,
+                                  alignment_progress="", alignment_retry_at=time.time() + 60)
+                return
             if self.store.get(sid)["status"] != "cancelled":
                 changes = {"warning" if lane == "analysis" else "error": error}
                 if lane == "analysis":
@@ -116,7 +204,9 @@ class Manager:
     @traced("classroom_job")
     def run(self, job):
         sid, payload, kind = job["session_id"], job["payload"], job["kind"]
-        if kind in {"chunk", "repair"}:
+        if kind == "align_courseware":
+            self.courseware.run(sid, payload["generation"])
+        elif kind in {"chunk", "repair"}:
             path = Path(payload["path"])
             started = time.monotonic()
             fresh = self.asr.transcribe(path)
@@ -166,8 +256,12 @@ class Manager:
                 packs = [segments]
             else:
                 packs = analysis_packs(segments)
-            model = self.settings.data["deepseek_model"]
-            fingerprint = hashlib.sha256(json.dumps(["summary-v2", model, reset_at, segments], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+            model = self.llm_stamp()
+            study = StudyStore(self.settings.root) if kind == "summary" else None
+            sources = selected_materials(study, session) if study else []
+            material_stamp = [[s["id"], s["fingerprint"]] for s in sources]
+            fingerprint = hashlib.sha256(json.dumps(["summary-v4-review", NOTES_PROMPT_VERSION, model, reset_at, segments, material_stamp,
+                session.get("alignment_generation")], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
             checkpoint = self.store.directory(sid) / "analysis-cache" / (fingerprint + ".json")
             completed = {}
             if kind == "summary" and checkpoint.exists():
@@ -175,62 +269,75 @@ class Manager:
                     completed = json.loads(checkpoint.read_text(encoding="utf-8"))
                 except (ValueError, OSError):
                     completed = {}
-            overviews, topics, sections = [], [], []
+            results = {i: completed[str(i)] for i in range(len(packs)) if str(i) in completed}
             if kind == "summary":
-                done = sum(str(i) in completed for i in range(len(packs)))
+                done = len(results)
                 self.store.update(sid, analysis_done=done, analysis_total=len(packs),
                                   analysis_progress=f"{done}/{len(packs)}", analysis_model=model)
-            for index, pack in enumerate(packs):
-                if self.store.get(sid)["status"] == "cancelled" or self.shutdown.is_set():
-                    return
-                if kind == "analyze" and self.store.get(sid).get("analysis", True) is False and not self.settings.mobile_enabled():
+
+            def check_pack():
+                current = self.store.get(sid)
+                if (current["status"] == "cancelled" or current.get("analysis_reset_at", 0) != reset_at
+                        or self.shutdown.is_set()):
+                    raise AnalysisPaused()
+                if kind == "analyze" and current.get("analysis", True) is False and not self.settings.mobile_enabled():
                     self.store.update(sid, analysis_status="paused")
-                    return
-                if self.settings.data["deepseek_model"] != model:
+                    raise AnalysisPaused()
+                if self.llm_stamp() != model:
                     raise ValueError("分析模型已切换，请点击继续生成笔记，使用新模型整理本课")
-                result = completed.get(str(index))
-                if result is None:
-                    result = self.analyzer.analyze(pack, summary=kind == "summary")
-                else:
-                    emit("cache.hit", "复用已完成的课堂段落", {"cache":"lecture_checkpoint","section":index+1})
-                if self.settings.data["deepseek_model"] != model:
+
+            def analyze_pack(pack):
+                check_pack()
+                context = (self.courseware.context(sid, pack, sources) or material_context(study, sources, pack)) if sources else []
+                return self.analyzer.analyze(pack, summary=kind == "summary", **({"materials": context} if context else {}))
+
+            parallelism = self.concurrency("analysis_parallelism", 3, 4) if kind == "summary" else 1
+            overviews, topics, sections = [], [], []
+            for index, result in self.analyze_packs(packs, completed, analyze_pack, check_pack, parallelism):
+                if self.llm_stamp() != model:
                     raise ValueError("分析模型已切换，请点击继续生成笔记，使用新模型整理本课")
-                if kind == "summary":
-                    completed[str(index)] = result
-                    atomic_json(checkpoint, completed)
-                topics.extend(result["topics"])
-                overviews.append(result["overview"])
-                sections.append({"start": pack[0]["start"], "end": pack[-1]["end"], "overview": result["overview"]})
                 with self.store.lock:
                     session = self.store.get(sid)
                     if session.get("analysis_reset_at", 0) != reset_at or session["status"] == "cancelled":
-                        return  # The user started a transcription repair; this response is stale.
+                        return  # A transcription repair invalidated the in-flight response.
+                    if str(index) in completed:
+                        emit("cache.hit", "复用已完成的课堂段落", {"cache":"lecture_checkpoint","section":index+1})
+                    results[index] = result
+                    if kind == "summary":
+                        completed[str(index)] = result
+                        atomic_json(checkpoint, completed)
+                    # Requests may finish out of order; notes and citations always
+                    # follow the original video, including partially saved results.
+                    ordered = [(packs[i], results[i]) for i in sorted(results)]
+                    topics = [topic for _, value in ordered for topic in value["topics"]]
+                    overviews = [value["overview"] for _, value in ordered]
+                    sections = [{"start": pack[0]["start"], "end": pack[-1]["end"],
+                                 "overview": value["overview"]} for pack, value in ordered]
+                    done = len(results)
                     partial = {"summary": {"overview": "\n\n".join(overviews), "topics": topics,
-                               "sections": sections, "source": "deepseek", "partial": True},
-                               "analysis_done": index + 1, "analysis_total": len(packs)} if kind == "summary" else {}
+                               "sections": sections, "source": "deepseek", "partial": True,
+                               "material_source_ids": [s["id"] for s in sources]},
+                               "analysis_done": done, "analysis_total": len(packs)} if kind == "summary" else {}
                     if saved_summary and not saved_summary.get("partial"):
                         partial.pop("summary", None)  # Keep the readable old notes during a refresh.
                     self.store.update(sid, events=(merge_events(session["events"], result["events"]) if kind == "analyze" else session["events"]),
-                                      analysis_progress=f"{index + 1}/{len(packs)}", **partial)
+                                      analysis_progress=f"{done}/{len(packs)}", **partial)
                 if kind == "summary":
                     while urgent := self.store.claim("analysis", max_priority=0):
                         self.execute(urgent)
             update = {"analysis_status": "complete", "warning": ""}
             if kind == "summary":
+                check_context = check_pack
                 self.store.update(sid, analysis_progress="生成整课概览", analysis_stage="outline")
                 outline = completed.get("outline")
                 if outline is None:
-                    outline = self.analyzer.synthesize(topics)
+                    outline_cache = completed.setdefault("outline-parts-v1", {})
+                    outline = self.analyzer.synthesize(topics, checkpoint=outline_cache,
+                                                      save=lambda: atomic_json(checkpoint, completed), check=check_context)
                     completed["outline"] = outline
                     atomic_json(checkpoint, completed)
-                if self.settings.data["deepseek_model"] != model:
+                if self.llm_stamp() != model:
                     raise ValueError("分析模型已切换，请点击继续生成笔记，使用新模型整理本课")
-                def check_context():
-                    current = self.store.get(sid)
-                    if current["status"] == "cancelled" or current.get("analysis_reset_at", 0) != reset_at or self.shutdown.is_set():
-                        raise AnalysisPaused()
-                    if self.settings.data["deepseek_model"] != model:
-                        raise ValueError("分析模型已切换，请使用新模型继续整理本课")
 
                 check_context()
                 self.store.update(sid, analysis_progress="通读全文，合并作业与要求", analysis_stage="events")
@@ -243,6 +350,7 @@ class Manager:
                 update.update(events=events, rule_candidates=rule_events(segments), events_version=3)
                 update["summary"] = {"overview": "\n\n".join(overviews), "topics": topics, "sections": sections,
                                      "source": "deepseek", "partial": False, "headline": outline["title"],
+                                     "material_source_ids": [s["id"] for s in sources],
                                      "abstract": outline["overview"], "groups": outline["groups"]}
                 update.update(analysis_progress=f"{len(packs)}/{len(packs)}", analysis_stage="complete")
             with self.store.lock:
@@ -304,6 +412,7 @@ class Manager:
                             audit = child.with_suffix(".asr.json")
                             if not audit.exists():
                                 child.unlink()
+            self.courseware.queue()
             self.queue_saved_notes()
 
     def queue_saved_notes(self):
@@ -314,9 +423,10 @@ class Manager:
         from the existing analysis cache.
         """
         try:
-            key = self.settings.key()
+            llm = self.settings.llm()
+            key, stamp = llm["key"], llm["provider"] + ":" + llm["model"]
         except ValueError:
-            key = ""  # A vault error must not stop the audio worker or subtitle saving.
+            key, stamp = "", ""  # A vault error must not stop the audio worker or subtitle saving.
         for session in self.store.records():
             sid = session["id"]
             if session.get("superseded_by") or not session["stopped"] or session["status"] != "complete":
@@ -327,13 +437,13 @@ class Manager:
             if summary and not summary.get("partial") and session.get("analysis_status") == "complete":
                 continue
             jobs = self.store.jobs(sid)
-            if any(j["state"] in {"pending", "running"} or (j["lane"] != "analysis" and j["state"] == "failed") for j in jobs):
+            if any(j["state"] in {"pending", "running"} or (j["lane"] in {"asr", "media"} and j["state"] == "failed") for j in jobs):
                 continue
             if not key:
                 if session.get("analysis_status") != "waiting_key":
                     self.store.update(sid, analysis_status="waiting_key", analysis_progress="保存 Key 后自动生成笔记")
                 continue
-            generation = hashlib.sha256(json.dumps([self.settings.data["deepseek_model"], key,
+            generation = hashlib.sha256(json.dumps([stamp, key,
                 session.get("analysis_reset_at", 0), session["segments"]], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
             same = session.get("notes_auto_generation") == generation
             attempts = session.get("notes_auto_attempts", 0) if same else 0

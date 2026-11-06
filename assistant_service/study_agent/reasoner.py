@@ -88,8 +88,10 @@ class Provider:
     def config(self):
         path = self.settings.root / "study-providers.json"
         if not path.exists():
-            return {"id": "deepseek", "base_url": "https://api.deepseek.com", "model": self.settings.data["deepseek_model"],
-                    "key": self.settings.key(), "json_mode": True, "disable_thinking": True}
+            llm = self.settings.llm()
+            return {"id": llm["provider"], "base_url": llm["base_url"], "model": llm["model"],
+                    "key": llm["key"], "json_mode": True, "disable_thinking": llm["provider"] == "deepseek",
+                    "token_param": llm["token_param"]}
         config = json.loads(path.read_text(encoding="utf-8"))
         selected = next((p for p in config["providers"] if p["id"] == config["selected"]), None)
         if not selected:
@@ -101,8 +103,13 @@ class Provider:
         env_name = selected.get("key_env", "")
         if env_name and not re.fullmatch(r"[A-Z][A-Z0-9_]{1,100}", env_name):
             raise ValueError("模型 Key 必须引用环境变量名")
-        # Only the exact official endpoint can reuse the existing DeepSeek credential.
-        key = self.settings.key() if selected.get("use_saved_deepseek_key") and parsed.netloc == "api.deepseek.com" else os.getenv(env_name, "")
+        # Only the exact official endpoint can reuse an existing saved credential.
+        if selected.get("use_saved_deepseek_key") and parsed.netloc == "api.deepseek.com":
+            key = self.settings.key()
+        elif selected.get("use_saved_openai_key") and parsed.netloc == "api.openai.com":
+            key = self.settings.openai_key()
+        else:
+            key = os.getenv(env_name, "")
         if not local and not key:
             raise ValueError("学习模型的 Key 尚未配置")
         return {**selected, "key": key}
@@ -110,8 +117,9 @@ class Provider:
     def public(self):
         try:
             cfg = self.config()
-            vision = cfg.get("supports_images", cfg.get("model") in {"deepseek-flash", "deepseek-v4-flash-vision-exp"}
-                             and urlparse(cfg["base_url"]).netloc == "api.deepseek.com")
+            vision = cfg.get("supports_images", cfg.get("id") == "openai"
+                             or (cfg.get("model") in {"deepseek-flash", "deepseek-v4-flash-vision-exp"}
+                                 and urlparse(cfg["base_url"]).netloc == "api.deepseek.com"))
             return {"id": cfg["id"], "model": cfg["model"], "vision": bool(vision), "configured": bool(cfg.get("key")) or urlparse(cfg["base_url"]).hostname in {"localhost", "127.0.0.1", "::1"}}
         except (ValueError, KeyError, TypeError):
             return {"configured": False, "model": "配置需要检查"}
@@ -142,8 +150,8 @@ class Provider:
     def complete(self, messages, timeout):
         cfg = self.config()
         if not cfg.get("key") and urlparse(cfg["base_url"]).hostname not in {"127.0.0.1", "localhost", "::1"}:
-            raise ValueError("尚未配置学习模型；可先在设置中保存 DeepSeek Key")
-        payload = {"model":cfg["model"], "messages":messages, "max_tokens":model_phase()[1]}
+            raise ValueError("尚未配置学习模型；可先在设置中保存 AI 服务 Key")
+        payload = {"model":cfg["model"], "messages":messages, cfg.get("token_param","max_tokens"):model_phase()[1]}
         if cfg.get("json_mode", True): payload["response_format"]={"type":"json_object"}
         if cfg.get("disable_thinking"): payload["thinking"]={"type":"disabled"}
         return self._request(cfg, payload, timeout)["content"]
@@ -158,7 +166,7 @@ class Provider:
         messages = [{"role": "system", "content":
             read_prompt("route-v1")},
             {"role": "user", "content": json.dumps({"course": course, "request": question}, ensure_ascii=False)}]
-        payload = {"model": cfg["model"], "messages": messages, "tools": tools, "tool_choice": "auto", "max_tokens": 650}
+        payload = {"model": cfg["model"], "messages": messages, "tools": tools, "tool_choice": "auto", cfg.get("token_param", "max_tokens"): 650}
         if cfg.get("disable_thinking"):
             payload["thinking"] = {"type": "disabled"}
         try:

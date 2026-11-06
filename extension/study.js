@@ -23,7 +23,7 @@
     if(state.courses.includes(old))$("course").value=old;
     if(!state.courses.length){const option=el("option","先添加资料或同步课堂");option.value="";$("course").append(option);}
     $("task-course").value=course();
-    $("model-note").textContent=state.provider.configured?`使用 ${state.provider.model} · 只发送本次检索到的摘录 · 引文通过校验后显示` : "尚未配置学习模型；可先导入、检索资料，或到设置中保存 DeepSeek Key。";
+    $("model-note").textContent=state.provider.configured?`使用 ${state.provider.model} · 只发送本次检索到的摘录 · 引文通过校验后显示` : "尚未配置学习模型；可先导入、检索资料，或到设置中保存 AI 服务 Key。";
     renderReviews();renderTasks();renderSources();renderPractices();renderTimetables();
     if(state.plans.length&&!currentPlan){currentPlan=state.plans[0];renderPlan();}
   }

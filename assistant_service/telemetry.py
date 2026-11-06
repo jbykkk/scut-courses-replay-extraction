@@ -206,7 +206,7 @@ def usage_of(body):
 def model_start(payload,secrets=()):
     cid=uuid.uuid4().hex[:16];now=time.monotonic()
     emit("model.start","请求模型",{"call_id":cid,"phase":model_phase()[0],
-         "model":payload.get("model"),"max_output_tokens":payload.get("max_tokens"),
+         "model":payload.get("model"),"max_output_tokens":payload.get("max_completion_tokens",payload.get("max_tokens")),
          "input_characters":len(compact(payload.get("messages",[]))),
          "request":safe({k:payload[k] for k in ("messages","tools","tool_choice","response_format","thinking") if k in payload},secrets)})
     return cid,now,model_phase()[0]

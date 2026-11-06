@@ -74,7 +74,7 @@ def router(settings, classroom):
                 "school_state": "readable" if courses else "needs_login_or_course" if any(c["school_tabs"] for c in online) else "closed",
                 "pending": [r for r in requests if time.time()-r["created"] < 86400 and r["course"] not in courses][-10:],
                 "extension_path": str(ROOT / "extension"), "school_url": SCHOOL, "vpn_url": VPN,
-                "key_saved": settings.public()["deepseek_configured"], "version": "0.14.0"}
+                "key_saved": settings.public()["llm_configured"], "version": "0.14.0"}
 
     @api.post("/school")
     def connect(body: Connect):

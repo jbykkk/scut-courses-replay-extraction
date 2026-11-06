@@ -26,6 +26,32 @@ class AnalysisRecoveryTests(unittest.TestCase):
         self.assertLessEqual(max(map(len, packs)), 96)
         self.assertEqual([s for pack in packs for s in pack], segments)
 
+    def test_failures_distinguish_connection_timeout_format_and_citation_errors(self):
+        segments = [{"id": "speech", "start": 0, "end": 5, "text": "条件变量需要循环检查。"}]
+        materials = [{"id": "evidence", "source_id": "source", "title": "slides.pdf", "locator": {"page": 1}, "text": "Use a while loop."}]
+        for failure, message in (("connection", "连接失败或中断"), ("timeout", "请求超时"),
+                                 ("format", "返回内容格式无效"), ("citation", "引用原文未通过核对")):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                settings = Settings(Path(tmp))
+                calls = []
+                def respond(request):
+                    calls.append(request)
+                    if failure == "connection":
+                        raise httpx.ConnectError("connection failed", request=request)
+                    if failure == "timeout":
+                        raise httpx.ReadTimeout("generation timed out", request=request)
+                    content = "invalid json" if failure == "format" else json.dumps({"topics": [{
+                        "title": "条件变量", "segment_ids": ["s1"], "material_refs": [{"id": "m1", "quote": "Use an if statement."}]}]})
+                    return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": content}}]})
+                analyzer = Analyzer(settings, httpx.MockTransport(respond))
+                try:
+                    with patch.object(settings, "key", return_value="test-key"), patch("assistant_service.analysis.time.sleep"):
+                        with self.assertRaisesRegex(ValueError, message):
+                            analyzer.analyze(segments, summary=True, materials=materials)
+                    self.assertEqual(len(calls), 3)
+                finally:
+                    analyzer.close()
+
     def test_truncated_output_splits_and_restores_original_citations(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(Path(tmp))
@@ -51,6 +77,7 @@ class AnalysisRecoveryTests(unittest.TestCase):
     def test_failed_summary_resumes_completed_packs_after_manager_restart(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(Path(tmp))
+            settings.data["analysis_parallelism"] = 1
             store = Store(settings.root)
             session = store.create({"mode": "subtitle", "analysis": True})
             sid = session["id"]
@@ -119,6 +146,7 @@ class AnalysisRecoveryTests(unittest.TestCase):
     def test_service_shutdown_stops_future_requests_and_keeps_saved_part(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(Path(tmp))
+            settings.data["analysis_parallelism"] = 1
             store = Store(settings.root)
             sid = store.create({"mode": "subtitle", "analysis": True})["id"]
             store.update(sid, stopped=True, segments=[{"id": str(i), "start": i, "end": i + 1, "text": "字幕" * 1700} for i in range(3)])
@@ -165,3 +193,28 @@ class CredentialPersistenceTests(unittest.TestCase):
             self.assertEqual(settings.public()["deepseek_key_status"], "unreadable")
             settings.update({"deepseek_key": "replacement-test-key"})
             self.assertTrue(settings.public()["deepseek_configured"])
+
+    @patch.dict(os.environ, {"OPENAI_API_KEY": "", "DEEPSEEK_API_KEY": ""})
+    def test_openai_key_stays_independent_and_never_public(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = Settings(root / "checkout", vault_root=root / "vault")
+            settings.update({"openai_key": "synthetic-openai-secret", "llm_provider": "openai"})
+            self.assertEqual(settings.openai_key(), "synthetic-openai-secret")
+            self.assertNotIn("synthetic-openai-secret", settings.vault.read_text())
+            self.assertNotIn("synthetic-openai-secret", json.dumps(settings.public()))
+            self.assertEqual(settings.public()["openai_key_status"], "saved")
+            # The two providers keep separate credentials; switching never leaks one key to the other.
+            self.assertFalse(settings.key())
+            self.assertEqual(settings.llm()["key"], "synthetic-openai-secret")
+            reopened = Settings(root / "checkout", vault_root=root / "vault")
+            self.assertEqual(reopened.openai_key(), "synthetic-openai-secret")
+            settings.update({"clear_openai_key": True})
+            self.assertFalse(settings.openai_key())
+
+    @patch.dict(os.environ, {"OPENAI_API_KEY": "env-openai-key"})
+    def test_openai_environment_variable_takes_precedence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(Path(tmp))
+            self.assertEqual(settings.openai_key(), "env-openai-key")
+            self.assertEqual(settings.public()["openai_key_status"], "environment")

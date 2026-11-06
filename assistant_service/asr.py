@@ -11,6 +11,8 @@ import time
 import wave
 from pathlib import Path
 
+import httpx
+
 
 def repetitive_text(text: str) -> bool:
     """Only flag extreme loops; natural stutters and short repeated phrases remain intact."""
@@ -51,10 +53,16 @@ class Transcriber:
         self.worker_log = None
         self.gpu_disabled = False
         self.requested_signature = None
+        self.api_client = None
 
     def diagnostics(self):
         data = self.settings.data
-        return {"engine": data["engine"], "model_exists": (Path(data["model_path"]) / "model.bin").is_file(),
+        try:
+            api_ready = bool(self.settings.openai_key())
+        except (ValueError, AttributeError):
+            api_ready = False
+        return {"engine": data["engine"], "api_ready": api_ready,
+                "model_exists": (Path(data["model_path"]) / "model.bin").is_file(),
                 "exe_exists": Path(data["engine_path"]).is_file(), "ffmpeg_exists": Path(data["ffmpeg_path"]).is_file(),
                 "loaded": self.model is not None or self.worker_process is not None and self.worker_process.poll() is None,
                 "device": self.loaded_device or data["device"],
@@ -82,6 +90,9 @@ class Transcriber:
         if self.worker_log:
             self.worker_log.close()
             self.worker_log = None
+        if self.api_client:
+            self.api_client.close()
+            self.api_client = None
 
     def _request_worker(self, path: Path, data: dict, device: str):
         config = {key: data[key] for key in ("engine", "engine_path", "model_path", "ffmpeg_path", "device", "compute_type", "language", "hotwords")}
@@ -170,6 +181,11 @@ class Transcriber:
 
     def load(self):
         data = self.settings.data
+        if data["engine"] == "api":
+            if not self.settings.openai_key():
+                raise ValueError("未保存 ChatGPT API Key；请在智能分析中填写，或切换回本地识别")
+            self.signature = None
+            return
         signature = tuple(data[k] for k in ("model_path", "device", "compute_type"))
         if self.model is not None and signature == self.signature:
             return
@@ -212,6 +228,11 @@ class Transcriber:
     def transcribe(self, path: Path) -> list[dict]:
         with self.lock:
             data = self.settings.data.copy()
+        if data["engine"] == "api":
+            # Each cloud request is independent, so API chunks run in parallel
+            # while the local engines keep serializing on the model lock.
+            return self.openai(path, data)
+        with self.lock:
             if data["engine"] == "xxl":
                 return self.xxl(path, data)
             if self.isolated and self.model is None:
@@ -280,6 +301,91 @@ class Transcriber:
         body = json.loads(files[0].read_text(encoding="utf-8-sig"))
         return [{"start": float(x["start"]), "end": float(x["end"]), "text": x["text"].strip()}
                 for x in body.get("segments", []) if x.get("text", "").strip()]
+
+    def _openai_client(self) -> httpx.Client:
+        client = self.api_client
+        if client is None:
+            with self.lock:
+                if self.api_client is None:
+                    # OpenAI is overseas: honor env/system proxies, unlike the domestic endpoints.
+                    self.api_client = httpx.Client(trust_env=True, timeout=180)
+                client = self.api_client
+        return client
+
+    def _drop_openai_client(self, client: httpx.Client) -> None:
+        """Dead proxy tunnels strand connections in the pool; rebuild it."""
+        with self.lock:
+            if self.api_client is client:
+                self.api_client = None
+        client.close()
+
+    def openai(self, path: Path, data: dict) -> list[dict]:
+        """Cloud speech recognition through the official OpenAI transcription API."""
+        key = self.settings.openai_key()
+        if not key:
+            raise ValueError("未保存 ChatGPT API Key；请在智能分析中填写，或切换回本地识别")
+        model = data["asr_api_model"]
+        # Segment timestamps are only available through verbose_json (whisper-1);
+        # gpt-transcribe family returns plain json, so the whole chunk becomes one segment.
+        verbose = model.startswith("whisper")
+        fields = {"model": model, "response_format": "verbose_json" if verbose else "json"}
+        if verbose:
+            fields["timestamp_granularities[]"] = "segment"
+        else:
+            fields["chunking_strategy"] = "auto"
+        if data["language"] != "auto":
+            fields["language"] = data["language"]
+        if data["hotwords"]:
+            fields["prompt"] = data["hotwords"][:800]
+        body, last_error = {}, None
+        for attempt in range(3):
+            client = self._openai_client()
+            try:
+                response = client.post("https://api.openai.com/v1/audio/transcriptions",
+                                                headers={"Authorization": "Bearer " + key}, data=fields,
+                                                files={"file": (path.name, path.read_bytes(), "audio/wav")})
+            except httpx.HTTPError as exc:
+                last_error = exc
+                if isinstance(exc, httpx.PoolTimeout):
+                    self._drop_openai_client(client)
+                time.sleep(2 ** attempt)
+                continue
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            if response.status_code != 200:
+                message = {401: "ChatGPT API Key 认证失败，请检查智能分析中的 OpenAI Key",
+                           403: "ChatGPT 账户没有语音识别权限",
+                           400: "语音识别请求被拒绝；请检查模型名与语言设置",
+                           413: "音频超过接口大小限制"}.get(response.status_code)
+                raise ValueError(message or f"ChatGPT 语音识别 HTTP {response.status_code}；请检查模型名或切换回本地识别")
+            try:
+                body = response.json()
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                time.sleep(2 ** attempt)
+                continue
+            break
+        else:
+            raise ValueError("ChatGPT 语音识别暂时不可用，请稍后重试或切换回本地识别") from last_error
+        if isinstance(body.get("segments"), list):
+            return [{"start": float(s["start"]), "end": float(s["end"]), "text": s["text"].strip(),
+                     **({"language": body["language"]} if body.get("language") else {})}
+                    for s in body["segments"] if isinstance(s, dict) and str(s.get("text", "")).strip()
+                    and float(s.get("end", 0)) > float(s.get("start", 0))]
+        text = str(body.get("text", "")).strip()
+        if not text:
+            return []
+        return [{"start": 0.0, "end": wav_seconds(path), "text": text,
+                 **({"language": body["language"]} if body.get("language") else {})}]
+
+
+def wav_seconds(path: Path) -> float:
+    try:
+        with wave.open(str(path), "rb") as audio:
+            return audio.getnframes() / audio.getframerate()
+    except (wave.Error, EOFError) as exc:
+        raise ValueError("无法解析 WAV 音频") from exc
 
 
 def validate_wav(path: Path) -> float:

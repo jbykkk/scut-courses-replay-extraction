@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .ingest import FORMATS, extract
 from .storage import digest
+from .materials import register_material
 from .prompt_catalog import read as read_prompt
 from ..telemetry import phase
 
@@ -86,10 +87,17 @@ def prepare_attachments(store, provider, root, ids, course, question):
     evidence = []
     for item in items:
         chunks = [{"text": readings[item["id"]], "locator": {"image": item["id"]}}] if item["image"] else item["chunks"]
-        result = store.source(origin="attachment:" + item["id"], course=course, title=item["name"],
-            kind="image_reading" if item["image"] else "material", fingerprint=digest([item["fingerprint"], chunks]), chunks=chunks,
-            meta={"attachment_id": item["id"], "verification": "model_reading" if item["image"] else "original_text"})
+        if item["image"]:
+            result = store.source(origin="attachment:" + item["id"], course=course, title=item["name"],
+                kind="image_reading", fingerprint=digest([item["fingerprint"], chunks]), chunks=chunks,
+                meta={"attachment_id": item["id"], "verification": "model_reading"})
+        else:
+            result = register_material(store, course=course, title=item["name"], fingerprint=item["fingerprint"],
+                                       chunks=chunks, attachment_id=item["id"])
         # Seed the first sections; subsequent search can retrieve the rest of a long file.
         for n in range(min(3, len(chunks))):
-            evidence.append(store.evidence(result["id"] + ":" + str(n)))
+            try:
+                evidence.append(store.evidence(result["id"] + ":" + str(n)))
+            except KeyError:
+                break  # An older parser may have stored fewer chunks for the same file.
     return evidence, bool(images)

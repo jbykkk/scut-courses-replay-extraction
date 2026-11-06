@@ -21,6 +21,8 @@ def create_review(store, *, course, topic, citations, days=1, now=None, source="
         old = store.get(rid, "review")
         if old.get("status") == "active":
             return old
+        if old.get("status") == "paused":
+            return update_review(store, rid, action="resume", now=now)
     except KeyError:
         pass
     return store.save("review", {"course": course, "topic": topic, "citations": citations, "source": source,
@@ -32,6 +34,15 @@ def update_review(store, rid, *, action, rating=None, now=None, feedback=None):
     item = store.get(rid, "review")
     if action == "pause":
         item["status"] = "paused"
+    elif action == "resume":
+        if item["status"] == "active":
+            return item
+        due = item["due_at"]
+        if due <= now:
+            due = next_review_time(store, now, 0, item["course"])
+            if due <= now:
+                due = next_review_time(store, now, 1, item["course"])
+        item.update(status="active", due_at=due, cycle=item["cycle"] + 1)
     elif action == "snooze":
         item.update(due_at=next_review_time(store, now, 1, item["course"]), cycle=item["cycle"] + 1)
     elif action == "complete":

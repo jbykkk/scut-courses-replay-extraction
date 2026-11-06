@@ -36,7 +36,7 @@ bar.addEventListener("pointermove",e=>{if(!drag)return;caption.style.left=Math.m
 bar.addEventListener("pointerup",()=>drag=null,{signal});bar.addEventListener("pointercancel",()=>drag=null,{signal});
 function alert(event){
  if(seen.has(event.id))return;seen.add(event.id);const el=document.createElement("div");el.className="alert";const dismiss=()=>{el.classList.add("leaving");setTimeout(()=>el.remove(),220);};
- const close=document.createElement("button");close.textContent="知道了";close.onclick=dismiss;const title=document.createElement("strong");title.textContent=event.label;const text=document.createElement("div");text.textContent=event.message;const evidence=document.createElement("p");evidence.className="evidence";evidence.textContent=V.clean({text:event.evidence});const tag=document.createElement("span");tag.className="tag";tag.textContent=event.source==="deepseek"?"DeepSeek · 原文已保存":"本地规则初筛 · 请核对";
+ const close=document.createElement("button");close.textContent="知道了";close.onclick=dismiss;const title=document.createElement("strong");title.textContent=event.label;const text=document.createElement("div");text.textContent=event.message;const evidence=document.createElement("p");evidence.className="evidence";evidence.textContent=V.clean({text:event.evidence});const tag=document.createElement("span");tag.className="tag";tag.textContent=event.source==="deepseek"?"AI 分析 · 原文已保存":"本地规则初筛 · 请核对";
  el.append(close,title,text,evidence,tag);alerts.append(el);while(alerts.children.length>3)alerts.firstChild.remove();setTimeout(dismiss,25000);
 }
 function transcript(rows,current){lastRows=rows.slice(-24);words.textContent=current.map(V.clean).join(" ")||"正在听课，等待新的字幕…";if(mode==="context")V.paint(history,lastRows,follow);}

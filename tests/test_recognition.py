@@ -1,14 +1,30 @@
 from pathlib import Path
 from types import SimpleNamespace
+import concurrent.futures
+import io
 import json
 import tempfile
+import threading
 import unittest
+import wave
 from unittest.mock import patch
+
+import httpx
 
 from assistant_service.asr import ASRProcessExit, Transcriber, repetitive_text, repetitive_segments
 from assistant_service.settings import Settings
 from assistant_service.manager import append_segments
 from assistant_service.analysis import rule_events
+
+
+def wav_bytes(seconds=1, rate=16000):
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(b"\0\0" * int(seconds * rate))
+    return buffer.getvalue()
 
 
 class RecognitionTests(unittest.TestCase):
@@ -134,6 +150,76 @@ class RecognitionTests(unittest.TestCase):
         repaired = append_segments(existing, [{'start': 0, 'end': 8, 'text': '同样一句话', 'language': 'zh'}], 'a', 0, 8)
         self.assertEqual([s['start'] for s in repaired], [0, 14])
         self.assertEqual(repaired[0]['language'], 'zh')
+
+    def api_engine(self, root, handler, model='whisper-1', language='zh'):
+        settings = Settings(Path(root))
+        settings.data.update(engine='api', asr_api_model=model, language=language, hotwords='操作系统')
+        engine = Transcriber(settings)
+        engine.api_client = httpx.Client(transport=httpx.MockTransport(handler))
+        return engine
+
+    def test_api_engine_requests_segments_from_the_official_endpoint(self):
+        with tempfile.TemporaryDirectory() as folder:
+            wav = Path(folder) / 'audio.wav'
+            wav.write_bytes(wav_bytes())
+            def handler(request):
+                self.assertEqual(str(request.url), 'https://api.openai.com/v1/audio/transcriptions')
+                self.assertIn(b'whisper-1', request.content)
+                self.assertIn(b'verbose_json', request.content)
+                self.assertIn(b'timestamp_granularities', request.content)
+                return httpx.Response(200, json={'language': 'zh', 'segments': [
+                    {'start': 0.1, 'end': 2.4, 'text': ' 同学们好 '},
+                    {'start': 2.4, 'end': 2.4, 'text': ''}]})
+            with patch.object(Settings, 'openai_key', return_value='sk-test'):
+                result = self.api_engine(folder, handler).transcribe(wav)
+            self.assertEqual(result, [{'start': 0.1, 'end': 2.4, 'text': '同学们好', 'language': 'zh'}])
+
+    def test_api_engine_plain_json_becomes_one_chunk_segment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            wav = Path(folder) / 'audio.wav'
+            wav.write_bytes(wav_bytes(seconds=4))
+            def handler(request):
+                body = request.content.decode('utf-8', 'ignore')
+                self.assertIn('gpt-transcribe', body)
+                self.assertNotIn('verbose_json', body)
+                self.assertNotIn('timestamp_granularities', body)
+                return httpx.Response(200, json={'text': '今天讲进程调度'})
+            with patch.object(Settings, 'openai_key', return_value='sk-test'):
+                result = self.api_engine(folder, handler, model='gpt-transcribe', language='auto').transcribe(wav)
+            self.assertEqual(result, [{'start': 0.0, 'end': 4.0, 'text': '今天讲进程调度'}])
+
+    def test_api_engine_transcribes_chunks_in_parallel(self):
+        with tempfile.TemporaryDirectory() as folder:
+            wav = Path(folder) / 'audio.wav'
+            wav.write_bytes(wav_bytes())
+            barrier = threading.Barrier(2, timeout=15)
+            calls = []
+            def handler(request):
+                calls.append(request)
+                # Both requests must be in flight together; a serialized
+                # transcriber deadlocks on this barrier and fails the test.
+                barrier.wait()
+                return httpx.Response(200, json={'text': '同学们好'})
+            engine = self.api_engine(folder, handler)
+            with patch.object(Settings, 'openai_key', return_value='sk-test'):
+                with concurrent.futures.ThreadPoolExecutor(2) as pool:
+                    results = list(pool.map(engine.transcribe, [wav, wav]))
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(all(result[0]['text'] == '同学们好' for result in results))
+
+    def test_api_engine_needs_a_saved_key_and_hides_upstream_bodies(self):
+        with tempfile.TemporaryDirectory() as folder:
+            wav = Path(folder) / 'audio.wav'
+            wav.write_bytes(wav_bytes())
+            with patch.object(Settings, 'openai_key', return_value=''):
+                with self.assertRaisesRegex(ValueError, 'ChatGPT API Key'):
+                    self.api_engine(folder, lambda r: httpx.Response(200)).transcribe(wav)
+            handler = lambda r: httpx.Response(401, text='upstream secret detail')
+            with patch.object(Settings, 'openai_key', return_value='sk-test'):
+                with self.assertRaises(ValueError) as ctx:
+                    self.api_engine(folder, handler).transcribe(wav)
+            self.assertNotIn('upstream secret', str(ctx.exception))
+            self.assertNotIn('sk-test', str(ctx.exception))
 
 
 if __name__ == '__main__':

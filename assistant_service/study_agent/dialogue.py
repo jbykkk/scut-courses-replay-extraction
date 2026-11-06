@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import time
 import re
+import threading
+from functools import wraps
+from weakref import WeakValueDictionary
 
 from .attachments import prepare_attachments
 from .reasoner import run_agent
@@ -12,6 +15,34 @@ from .operations import choose_operation
 from .daily import is_daily_question, daily_reply
 from .classroom_search import is_classroom_question
 from ..telemetry import traced, current, emit
+
+
+_request_locks = WeakValueDictionary()
+_request_guard = threading.Lock()
+
+
+def serialized_request(fn):
+    @wraps(fn)
+    def call(store, provider, root, **kwargs):
+        key = (str(store.path.resolve()), kwargs["conversation"], kwargs["client_id"])
+        with _request_guard:
+            lock = _request_locks.setdefault(key, threading.Lock())
+        with lock:
+            return fn(store, provider, root, **kwargs)
+    return call
+
+
+def completed_request(store, payload):
+    tid = digest(["turn", payload["conversation"], payload["client_id"]])[:32]
+    try:
+        old = store.get(tid, "turn")
+    except KeyError:
+        return None
+    fingerprint = digest([payload["conversation"], payload["course"], payload["question"],
+                          payload["purpose"], payload["attachments"], payload["review_id"]])
+    if old["request"] != fingerprint:
+        raise ValueError("同一条消息的内容已改变，请重新发送")
+    return public_turn(old, store) if old["status"] == "ready" else None
 
 
 def public_turn(turn, store=None):
@@ -38,15 +69,19 @@ def home(store, conversation="main", now=None):
     return {"turns": [public_turn(t, store) for t in history[-50:]], "courses": courses,
         "course": next((t["course"] for t in reversed(history) if t.get("course")), ""),
         "reviews": reviews, "due": [r for r in reviews if r["today"]], "review_preferences": preferences(store),
+        "paused_reviews": [r for r in store.list("review") if r.get("status") == "paused"],
         "operations": store.list("operation")[:30],
         "alerts": [a for a in store.list("study_alert") if not a.get("handled")],
         "task_count": len(tasks), "source_count": len(store.sources()),
         "pending_count": sum(p.get("status") == "pending" for p in store.list("proposal"))}
 
 
+@serialized_request
 @traced("chat")
 def converse(store, provider, root, *, conversation, client_id, course, question, purpose="auto", attachments=None, review_id=None, operations=None):
     attachments = attachments or []
+    request_input = dict(conversation=conversation, client_id=client_id, course=course, question=question,
+                         purpose=purpose, attachments=attachments, review_id=review_id)
     request = digest([conversation, course, question, purpose, attachments, review_id])
     tid = digest(["turn", conversation, client_id])[:32]
     try:
@@ -80,7 +115,7 @@ def converse(store, provider, root, *, conversation, client_id, course, question
     if not course and history and not ambiguous:
         course = next((t["course"] for t in reversed(history) if t.get("course")), "")
     selected_attachments = [store.get(aid, "attachment") for aid in attachments]
-    turn = {"conversation": conversation, "request": request, "course": course, "question": question,
+    turn = {"conversation": conversation, "request": request, "request_input": request_input, "course": course, "question": question,
         "purpose": purpose, "review_id": review_id, "status": "running", "trace_id":current().id if current() else None, "created_at": old["created_at"] if old else time.time(),
         "attachments": [{k: a[k] for k in ("id", "name", "image")} for a in selected_attachments]}
     store.save("turn", turn, tid)

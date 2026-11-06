@@ -21,7 +21,8 @@ def study_prompt(purpose):
 
 def catalog():
     labels = {"study-v2":"学习问答 · 通用规则", "route-v1":"工具选择", "audit-v1":"出处支持度核对",
-              "vision-v1":"图片识读", "feedback-v1":"练习反馈", "classroom-v1":"课堂分析", "events-v1":"课堂事项提取"}
+              "vision-v1":"图片识读", "feedback-v1":"练习反馈", "classroom-v1":"课堂分析",
+              "classroom-review-v1":"课堂笔记 · 双语复习讲义", "events-v1":"课堂事项提取"}
     return [{"id":name, "title":title, "file":"assistant_service/study_agent/prompts/"+name+".txt",
              "text":read(name), "version":hashlib.sha256(read(name).encode()).hexdigest()[:12]}
             for name,title in labels.items() if (ROOT/(name+".txt")).exists()]

@@ -46,7 +46,7 @@ class Lesson(BaseModel):
 
 class ConfigPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    engine: Literal["resident", "xxl"] | None = None
+    engine: Literal["resident", "xxl", "api"] | None = None
     engine_path: str | None = Field(default=None, max_length=1000)
     model_path: str | None = Field(default=None, max_length=1000)
     ffmpeg_path: str | None = Field(default=None, max_length=1000)
@@ -57,7 +57,15 @@ class ConfigPatch(BaseModel):
     deepseek_model: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9._-]{1,100}$")
     deepseek_key: str | None = Field(default=None, max_length=500)
     clear_deepseek_key: bool = False
+    llm_provider: Literal["deepseek", "openai"] | None = None
+    openai_model: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9._-]{1,100}$")
+    openai_key: str | None = Field(default=None, max_length=500)
+    clear_openai_key: bool = False
+    asr_api_model: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9._-]{1,100}$")
     analysis_window: int | None = Field(default=None, ge=15, le=120)
+    asr_workers: int | None = Field(default=None, ge=1, le=8)
+    analysis_workers: int | None = Field(default=None, ge=1, le=8)
+    analysis_parallelism: int | None = Field(default=None, ge=1, le=4)
     retain_audio: bool | None = None
     mobile_notifications_enabled: bool | None = None
     media_hosts: list[str] | None = Field(default=None, max_length=20)
@@ -120,6 +128,9 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
     settings = settings or Settings()
     store = store or Store(settings.root)
     manager = manager or Manager(settings, store)
+    from .lecture_api import router as lecture_router
+    from .courseware import CoursewareAlignment
+    courseware = getattr(manager, "courseware", None) or CoursewareAlignment(settings, store)
     connection_result = {}
 
     @asynccontextmanager
@@ -132,6 +143,8 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
         study_api.operations.close()
         study_api.provider.close()
         manager.close()
+        if courseware is not getattr(manager, "courseware", None):
+            courseware.close()
 
     app = FastAPI(title="SCUT Local Assistant", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.settings, app.state.store, app.state.manager = settings, store, manager
@@ -139,6 +152,11 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
     study_api = study_router(settings, store)
     app.state.study_operations = study_api.operations
     app.include_router(study_api)
+    app.include_router(lecture_router(settings, store))
+    from .courseware_api import router as courseware_router
+    app.include_router(courseware_router(courseware))
+    from .mindmap import router as mindmap_router
+    app.include_router(mindmap_router(store))
     from .desktop import router as desktop_router
     app.include_router(desktop_router(settings, store))
     app.add_middleware(CORSMiddleware,
@@ -169,7 +187,7 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'"
         return response
 
     @app.exception_handler(KeyError)
@@ -187,6 +205,7 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
     @app.get("/api/health")
     def diagnostics(brief: bool = False):
         return {"ok": True, "asr": manager.asr.diagnostics(), "deepseek_configured": settings.public()["deepseek_configured"],
+                "llm_configured": settings.public()["llm_configured"],
                 "mobile": manager.mobile.status(),
                 **({} if brief else {"jobs": [j for j in store.jobs() if j["state"] in {"pending", "running", "failed"}]})}
 
@@ -230,11 +249,16 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
                     if folder.is_dir() and (folder / "model.bin").is_file():
                         installed[str(folder)] = folder.name
         return {"speech": [{"path": p, "name": n} for p, n in sorted(installed.items())],
-                "deepseek": ["deepseek-flash", "deepseek-v4-pro"], "selected": settings.data["deepseek_model"]}
+                "deepseek": ["deepseek-flash", "deepseek-v4-pro"],
+                "openai": ["gpt-5-mini", "gpt-5", "gpt-4o-mini", "gpt-4o"],
+                "asr_api": ["gpt-transcribe", "whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"],
+                "selected": settings.data["deepseek_model"], "selected_openai": settings.data["openai_model"],
+                "selected_asr_api": settings.data["asr_api_model"]}
 
     @app.post("/api/settings")
     def update_configuration(patch: ConfigPatch):
         settings.update(patch.model_dump(exclude_none=True))
+        manager.configure_workers()
         return configuration()
 
     def mobile_configuration(include_secret=False):
@@ -256,8 +280,8 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
 
     @app.post("/api/mobile/setup")
     def mobile_setup():
-        if not settings.key():
-            raise ValueError("请先配置 DeepSeek Key，再开启手机课堂提醒")
+        if not settings.llm()["key"]:
+            raise ValueError(f"请先配置 {settings.llm()['label']} Key，再开启手机课堂提醒")
         pairing = settings.mobile_pairing()
         if not pairing:
             settings.save_mobile_pairing(make_pairing())
@@ -267,8 +291,8 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
     def mobile_enabled(body: MobileEnabled):
         if body.enabled and not settings.mobile_pairing():
             raise ValueError("请先生成手机配对码")
-        if body.enabled and not settings.key():
-            raise ValueError("手机提醒需要 DeepSeek Key 才能判断课堂事件")
+        if body.enabled and not settings.llm()["key"]:
+            raise ValueError(f"手机提醒需要 {settings.llm()['label']} Key 才能判断课堂事件")
         settings.update({"mobile_notifications_enabled": body.enabled})
         return mobile_configuration()
 
@@ -303,7 +327,7 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
             return {"transcription_total": len(audio),
                     "transcription_done": sum(j["state"] == "done" for j in audio),
                     "transcription_failed": sum(j["state"] == "failed" for j in audio)}
-        return [{k: v for k, v in s.items() if k not in {"segments", "events", "rule_candidates"}} |
+        return [{k: v for k, v in s.items() if k not in {"segments", "events", "rule_candidates", "mindmap"}} |
                 {"segment_count": len(s["segments"]), "event_count": len(s["events"]), "important_events_complete": True,
                  "important_events": [e for e in s["events"] if e.get("source") == "deepseek" and e.get("category") in CATEGORIES]} | progress(s) for s in (store.list() if trash else store.records())
                 if (bool(s.get("deleted_at")) and not s.get("deleted_with") if trash else not s.get("superseded_by"))]
@@ -350,8 +374,8 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
             if not lesson.source_url:
                 raise ValueError("此课时未发现回放源，请刷新课程页面或使用标签页识别")
             validate_media_url(lesson.source_url, settings.data["media_hosts"])
-        if lesson.analysis and not settings.key():
-            raise ValueError("请先在设置填写 DeepSeek API Key，或取消勾选 DeepSeek 分析")
+        if lesson.analysis and not settings.llm()["key"]:
+            raise ValueError(f"请先在设置填写 {settings.llm()['label']} API Key，或取消勾选智能分析")
         value = store.create(lesson.model_dump(exclude={"source_url", "force_new"}))
         if lesson.mode == "replay":
             store.enqueue(value["id"], "media", {"url": lesson.source_url}, lane="media")
@@ -378,8 +402,8 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
     def analysis_preference(sid: str, body: AnalysisPreference):
         with store.lock:
             session = store.get(sid)
-            if body.enabled and not settings.key():
-                raise ValueError("请先配置 DeepSeek API Key")
+            if body.enabled and not settings.llm()["key"]:
+                raise ValueError(f"请先配置 {settings.llm()['label']} API Key")
             if not body.enabled:
                 store.cancel_pending_analysis(sid, realtime_only=True)
             value = store.update(sid, analysis=body.enabled)
@@ -499,8 +523,8 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
                 raise ValueError("此任务已取消，请重新导入课时")
             if any(j["lane"] in {"asr", "media"} and j["state"] in {"pending", "running"} for j in store.jobs(sid)):
                 raise HTTPException(409, "请等字幕处理完成后再生成整课笔记")
-            if not settings.key():
-                raise ValueError("请先配置 DeepSeek API Key")
+            if not settings.llm()["key"]:
+                raise ValueError(f"请先配置 {settings.llm()['label']} API Key")
             if not session["segments"]:
                 raise ValueError("此课时尚无字幕")
             if store.pending(sid, "analysis"):
@@ -525,16 +549,20 @@ def create_app(settings=None, store=None, manager=None, *, run_workers=True, por
     # Loopback HTML pairs through an HttpOnly same-origin cookie; extension pages use a bearer token.
     @app.get("/")
     def index():
-        response = FileResponse(ROOT / "extension" / "study.html")
+        response = FileResponse(ROOT / "extension" / "study.html", media_type="text/html")
         response.set_cookie("scut_local", settings.data["token"], httponly=True, samesite="strict", path="/")
         return response
 
     @app.get("/{name}")
     def asset(name: str):
         desktop_assets = {"desktop-entry.js", "desktop-entry.css", "start.html", "start.js"}
-        if name not in desktop_assets | {"study.html", "study.js", "study.css", "study-tools.js", "study-actions.js", "study-specialized.js", "study-conversation.js", "study-conversation.css", "study-runtime.js", "study-runtime.css", "dashboard.html", "dashboard.js", "library.css", "library-core.js", "assistant.css", "client.js", "options.html", "options.js", "ui.js", "welcome.html", "welcome.js", "study-popup.html", "study-popup.js", "study-popup.css", "popup-state.js", "classroom.html", "classroom.js", "classroom.css", "session-view.js", "brand.png"}:
+        mindmap_assets = {"mindmap.js", "mindmap.css", "markmap-vendor.min.js", "markmap-vendor.css"}
+        if name not in desktop_assets | mindmap_assets | {"study.html", "study.js", "study.css", "study-tools.js", "study-actions.js", "study-specialized.js", "study-conversation.js", "study-conversation.css", "study-runtime.js", "study-runtime.css", "dashboard.html", "dashboard.js", "lecture-compare.js", "lecture-compare.css", "courseware.js", "courseware.css", "library.css", "library-core.js", "assistant.css", "client.js", "options.html", "options.js", "ui.js", "welcome.html", "welcome.js", "study-popup.html", "study-popup.js", "study-popup.css", "popup-state.js", "classroom.html", "classroom.js", "classroom.css", "session-view.js", "brand.png"}:
             raise HTTPException(404)
-        response = FileResponse(ROOT / "extension" / name)
+        # Windows registry MIME associations can label .js as text/plain, which
+        # browsers refuse to execute with nosniff. Keep our asset types explicit.
+        media_types = {".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png"}
+        response = FileResponse(ROOT / "extension" / name, media_type=media_types[Path(name).suffix])
         if name.endswith(".html"):
             response.set_cookie("scut_local", settings.data["token"], httponly=True, samesite="strict", path="/")
         return response

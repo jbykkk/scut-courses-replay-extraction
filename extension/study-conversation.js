@@ -5,6 +5,20 @@
   const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   let home = {turns: [], reviews: [], due: []}, pending = [], sending = false, uploading = 0, lastRender = "";
   const conversation = "main";
+  const outboxKey = "study-pending-requests";
+  let outbox = [];
+  try { outbox = JSON.parse(sessionStorage.getItem(outboxKey) || "[]").filter(item => item.payload?.conversation === conversation && item.payload.client_id); } catch { /* Start with an empty outbox if storage was damaged. */ }
+  function persistOutbox() { sessionStorage.setItem(outboxKey, JSON.stringify(outbox)); }
+  function draftSnapshot() { return {text: $("question").value, course: $("course").value || sessionStorage.getItem("study-draft-course") || "", attachments: pending.map(file => file.id)}; }
+  function hasDraft() { return !!$("question").value.trim() || pending.length > 0; }
+  function completeRequest(entry) {
+    if (entry.draft && JSON.stringify(draftSnapshot()) === JSON.stringify(entry.draft)) {
+      $("question").value = ""; pending = []; renderAttachments();
+      sessionStorage.removeItem("study-draft-course");
+    }
+    sessionStorage.setItem("study-draft-text", $("question").value);
+    outbox = outbox.filter(item => item.payload.client_id !== entry.payload.client_id); persistOutbox();
+  }
   const niceTime = value => new Date(value * 1000).toLocaleString("zh-CN", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false});
   function notice(text) { $("notice").textContent = text; $("notice").hidden = !text; }
   function button(text, handler, cls = "") {
@@ -22,13 +36,16 @@
   $("manage-reviews").addEventListener("click", () => { menuClose(); renderReviews(); $("review-dialog").showModal(); });
   document.addEventListener("study-state", e => {
     const s = e.detail;
-    if (!$("course").value && home.course) $("course").value = home.course;
+    const remembered = sessionStorage.getItem("study-draft-course");
+    if (hasDraft() && remembered !== null && [...$("course").options].some(option => option.value === remembered)) $("course").value = remembered;
+    if (!hasDraft() && !$("course").value && home.course) $("course").value = home.course;
     $("model-note").textContent = s.provider.configured
       ? `${s.provider.model}${s.provider.vision ? " · 支持图片" : " · 当前仅文字"} · 发送时使用相关摘录与所选图片，记录保存在本机`
       : "模型尚未连接。可以先发送资料，或到设置中保存 Key。";
     $("onboarding").textContent = s.sources.length ? `已索引 ${s.sources.length} 份资料与课堂记录。` : "添加资料或同步课堂记录后，可以按课程提问。";
   });
   $("attach").addEventListener("click", () => $("attachment-picker").click());
+  $("course").addEventListener("change", () => sessionStorage.setItem("study-draft-course", $("course").value));
   $("start-attachment").addEventListener("click", () => $("attachment-picker").click());
   $("attachment-picker").addEventListener("change", e => { addFiles([...e.target.files]); e.target.value = ""; });
   $("question").addEventListener("paste", e => { const files = [...(e.clipboardData?.items || [])].filter(x => x.kind === "file").map(x => x.getAsFile()).filter(Boolean); if (files.length) { e.preventDefault(); addFiles(files); } });
@@ -41,6 +58,7 @@
     for (const file of pending) root.append(button((file.image ? "▧ " : "▤ ") + file.name + "  ×", async () => { pending = pending.filter(f => f.id !== file.id); renderAttachments(); }, "attachment-chip"));
     if (uploading) root.append(el("span", "正在读取附件…", "fine"));
     sessionStorage.setItem("study-draft-files", JSON.stringify(pending));
+    if (pending.length) sessionStorage.setItem("study-draft-course", draftSnapshot().course);
     $("send").disabled = sending || uploading > 0;
   }
   async function addFiles(files) {
@@ -70,7 +88,10 @@
   async function refresh(force = false) {
     const nearEnd = window.innerHeight + window.scrollY > document.body.scrollHeight - 260;
     home = await A.api("/api/study/home?" + new URLSearchParams({conversation})); renderNudge();
-    if (!$("course").value && home.course && [...$("course").options].some(o => o.value === home.course)) $("course").value = home.course;
+    for (const entry of [...outbox]) {
+      if (home.turns.some(turn => turn.status === "ready" && turn.request_input?.client_id === entry.payload.client_id)) completeRequest(entry);
+    }
+    if (!hasDraft() && !$("course").value && home.course && [...$("course").options].some(o => o.value === home.course)) $("course").value = home.course;
     const signature = JSON.stringify(home.turns);
     StudyActions.updateJobs(home.operations || []);
     if (signature !== lastRender || force) { renderDialogue(); lastRender = signature; if (nearEnd && !force) scrollLatest(); }
@@ -83,7 +104,10 @@
       if (turn.course) user.append(el("span", turn.course, "course-label")); user.append(el("p", turn.question));
       for (const attachment of turn.attachments || []) user.append(attachment.image ? button("▧ " + attachment.name, () => openImage(attachment.id), "attachment-chip") : el("span", "▤ " + attachment.name, "attachment-chip"));
       pair.append(user); const reply = el("div", undefined, "assistant-message"); reply.append(el("span", "SCUT", "speaker"));
-      if (turn.status === "failed") reply.append(el("p", turn.error, "uncertainty"), button("接着试一次", () => send(turn.question, {course: turn.course, attachments: (turn.attachments || []).map(a => a.id), purpose: turn.purpose})));
+      if (turn.status === "failed") reply.append(el("p", turn.error, "uncertainty"), button("接着试一次", () => send(turn.question, {request: turn.request_input || {
+        conversation: turn.conversation || conversation, client_id: "retry-" + turn.id, question: turn.question,
+        course: turn.course, attachments: (turn.attachments || []).map(a => a.id), purpose: turn.purpose, review_id: turn.review_id || null
+      }})));
       else if (turn.status === "running") reply.append(el("p", "这条消息正在处理。页面关掉再回来，对话仍会留在这里。", "fine"));
       else renderAnswer(reply, turn);
       const traceId=turn.trace_id||turn.result?.trace_id;
@@ -100,7 +124,7 @@
     });
     if (r.status === "needs_course") {
       const choices = el("div", undefined, "suggestions");
-      for (const name of r.choose_course || []) choices.append(button(name, () => { $("course").value = name; return send(turn.question, {course: name, attachments: turn.attachments.map(a => a.id)}); }));
+      for (const name of r.choose_course || []) choices.append(button(name, () => send(turn.question, {course: name, attachments: turn.attachments.map(a => a.id)})));
       const name = el("input"); name.placeholder = "也可以直接写课程名称"; name.maxLength = 160; name.setAttribute("aria-label", "新课程名称");
       choices.append(name, button("接着看这门课", () => { if (!name.value.trim()) throw new Error("写下课程名就好"); return send(turn.question, {course: name.value.trim(), attachments: turn.attachments.map(a => a.id)}); })); root.append(choices); return;
     }
@@ -124,7 +148,7 @@
       const actions = el("div", undefined, "suggestions");
       actions.append(button("串联前后知识", () => send("结合刚才的内容和这门课的前后知识，解释它们为什么有关、在哪些条件下不同。请给出两处依据。", {course: turn.course, purpose: "connect"})),
         button("深入总结一下", () => send("围绕刚才的主题深入总结：核心问题、推导关系、适用边界与容易混淆的地方。", {course: turn.course, purpose: "summary"})),
-        button("加入复习", async () => { const review = await post("/reviews", {turn_id: turn.id, days: 1}); notice("记下了，先在 " + niceTime(review.due_at) + " 复习。复习后会根据反馈调整间隔。"); await refresh(); })); root.append(actions);
+        button("加入复习", async () => { const review = await post("/reviews", {turn_id: turn.id, days: 1}); notice("复习安排已保存，下次复习：" + niceTime(review.due_at) + "。已有作答记录会保留。"); await refresh(); })); root.append(actions);
       const trace = el("details", undefined, "trace"); trace.append(el("summary", "这次参考了什么"), el("p", `结合当前课程与最近对话，执行 ${(r.trace || []).filter(t => t.tool).length} 次来源读取。课程结论可回查上面的依据；图片识读单独标明。`)); root.append(trace);
     }
   }
@@ -164,34 +188,59 @@
     else if (home.reviews.length) { root.append(el("span", "下次复习", "eyebrow"), el("p", `下次复习 ${niceTime(home.reviews[0].due_at)} · ${home.reviews[0].course}`), button("调整节奏", () => { renderReviews(); $("review-dialog").showModal(); }, "quiet")); root.hidden = false; }
     else root.hidden = true;
   }
-  function startReview(review) { $("review-dialog").close(); $("course").value = review.course; const mode={prerequisite:"先找出前置理解缺口，给一道基础辨析题",application:"换一个情境，给一道应用题",connection:"给一道串联前后概念的题",recall:"给一道回忆关键条件的题"}[review.mode]||"给一道题"; return send(mode+"。"+"请围绕“" + review.topic + "”出一道检验理解的题，接着串联它的前置知识。先不要给答案。", {course: review.course, purpose: "practice", review_id: review.id}); }
+  function startReview(review) { $("review-dialog").close(); const mode={prerequisite:"先找出前置理解缺口，给一道基础辨析题",application:"换一个情境，给一道应用题",connection:"给一道串联前后概念的题",recall:"给一道回忆关键条件的题"}[review.mode]||"给一道题"; return send(mode+"。"+"请围绕“" + review.topic + "”出一道检验理解的题，接着串联它的前置知识。先不要给答案。", {course: review.course, purpose: "practice", review_id: review.id}); }
   function renderReviews() {
     const root = $("review-list"); root.replaceChildren();
-    if (!home.reviews.length) root.append(el("p", "在回答下面点击“加入复习”，这里会显示下一次复习时间。"));
+    const paused = home.paused_reviews || [];
+    if (!home.reviews.length) root.append(el("p", paused.length ? "当前没有进行中的复习，可以在下方恢复已暂停的条目。" : "在回答下面点击“加入复习”，这里会显示下一次复习时间。"));
     for (const r of home.reviews) { const card = el("div", undefined, "review-row"); card.append(el("span", r.course, "pill"), el("h3", r.topic), el("p", niceTime(r.due_at)+" · 约 "+r.minutes+" 分钟 · "+(r.reasons||[]).join("；"), "fine"), button("现在回忆", () => startReview(r)), button("推迟一天", async () => { await post(`/reviews/${r.id}`, {action: "snooze"}); await refresh(); renderReviews(); }), button("暂停这一项", async () => { await post(`/reviews/${r.id}`, {action: "pause"}); await refresh(); renderReviews(); })); root.append(card); }
+    if (paused.length) {
+      const section = el("details"); section.open = !home.reviews.length; section.append(el("summary", "已暂停 · " + paused.length));
+      for (const r of paused) {
+        const card = el("div", undefined, "review-row");
+        card.append(el("span", r.course, "pill"), el("h3", r.topic), el("p", `已暂停 · 保留 ${(r.attempts || []).length} 次作答记录`, "fine"), button("恢复复习", async () => {
+          const review = await post(`/reviews/${r.id}`, {action: "resume"});
+          await refresh(); renderReviews(); notice("已恢复复习，下次复习：" + niceTime(review.due_at));
+        })); section.append(card);
+      }
+      root.append(section);
+    }
   }
   async function today() {
     return send("今晚只有30分钟，先学什么？", {course:"", purpose:"today"});
   }
   $("open-today").addEventListener("click", () => today().catch(e => notice(e.message)));
-  document.querySelectorAll("[data-starter]").forEach(b => b.addEventListener("click", () => { if (b.dataset.intent === "today") today().catch(e => notice(e.message)); else { $("question").value = b.dataset.starter; $("question").focus(); } }));
+  document.querySelectorAll("[data-starter]").forEach(b => b.addEventListener("click", () => { if (b.dataset.intent === "today") today().catch(e => notice(e.message)); else if (hasDraft()) { notice("输入框中还有草稿，请先发送或整理好当前内容。"); $("question").focus(); } else { $("question").value = b.dataset.starter; sessionStorage.setItem("study-draft-text", $("question").value); $("question").focus(); } }));
   async function send(text, options = {}) {
-    if (sending || uploading) return;
-    const question = text.trim() || (pending.length ? "帮我读懂这份资料，先提炼一个核心问题，再引导我往下学。" : ""); if (!question) return;
+    if (sending || (options.draft && uploading)) return;
+    const question = text.trim(); if (!question) return;
+    const payload = options.request || {conversation, question, course: options.course ?? $("course").value,
+      attachments: options.attachments || [], purpose: options.purpose || "auto", review_id: options.review_id || null};
+    const kind = options.draft ? "draft" : "action";
+    const signature = value => JSON.stringify([value.conversation, value.question, value.course, value.attachments, value.purpose, value.review_id]);
+    let entry = outbox.find(item => payload.client_id ? item.payload.client_id === payload.client_id : item.kind === kind && signature(item.payload) === signature(payload));
+    if (!entry) {
+      entry = {kind, payload: {...payload, client_id: payload.client_id || crypto.randomUUID()}, draft: options.draft || null};
+      outbox.push(entry); persistOutbox();
+    }
     sending = true; $("thinking").hidden = false; $("send").disabled = true; notice("");
-    const ids = options.attachments || pending.map(f => f.id), course = options.course ?? $("course").value, original = $("question").value;
     try {
-      const result = await post("/chat", {conversation, client_id: crypto.randomUUID(), question, course, attachments: ids, purpose: options.purpose || "auto", review_id: options.review_id || null});
-      if (result.course && !$("course").value) $("course").value = result.course;
-      if ($("question").value === original) $("question").value = "";
-      pending = []; renderAttachments(); sessionStorage.removeItem("study-draft-text");
+      const result = await post("/chat", entry.payload);
+      completeRequest(entry);
+      if (result.course && !hasDraft() && !$("course").value) $("course").value = result.course;
       await refresh(true); await T.load(); scrollLatest();
-    } catch (e) { notice(e.message + "；对话和附件保留，可继续补充或重试。"); await refresh().catch(() => {}); }
+    } catch (e) { notice(e.message + "；草稿已保留，重试会继续同一条请求。"); await refresh().catch(() => {}); }
     finally { sending = false; $("thinking").hidden = true; $("send").disabled = uploading > 0; }
   }
-  $("ask-form").addEventListener("submit", e => { e.preventDefault(); send($("question").value); });
-  $("question").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send($("question").value); } });
-  $("question").addEventListener("input", () => { sessionStorage.setItem("study-draft-text", $("question").value); $("question").style.height = "auto"; $("question").style.height = Math.min(180, $("question").scrollHeight) + "px"; });
+  function submitDraft() {
+    const draft = draftSnapshot();
+    sessionStorage.setItem("study-draft-course", draft.course);
+    const question = draft.text.trim() || (draft.attachments.length ? "帮我读懂这份资料，先提炼一个核心问题，再引导我往下学。" : "");
+    return send(question, {draft, course: draft.course, attachments: draft.attachments});
+  }
+  $("ask-form").addEventListener("submit", e => { e.preventDefault(); void submitDraft(); });
+  $("question").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); void submitDraft(); } });
+  $("question").addEventListener("input", () => { sessionStorage.setItem("study-draft-text", $("question").value); sessionStorage.setItem("study-draft-course", draftSnapshot().course); $("question").style.height = "auto"; $("question").style.height = Math.min(180, $("question").scrollHeight) + "px"; });
   try { pending = JSON.parse(sessionStorage.getItem("study-draft-files") || "[]").slice(0, 4); $("question").value = sessionStorage.getItem("study-draft-text") || ""; } catch { pending = []; }
   renderAttachments(); refresh().catch(e => notice(e.message));
   setInterval(() => { if (!document.hidden && !sending && !document.querySelector("dialog[open]")) refresh().catch(() => {}); }, 7000);

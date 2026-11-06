@@ -135,7 +135,17 @@ class Store:
                 lines += ["### " + group["title"], group["detail"], ""]
             lines += ["## 分段笔记"]
             for topic in summary.get("topics", []):
-                lines += [f"- [{topic.get('start', 0):.0f}s] {topic['title']} · {topic.get('chapter') or '未明确章节'}：{topic.get('detail', '')}"]
+                lines += ["", "### " + topic["title"], "",
+                          f"[{topic.get('start', 0):.0f}s] · {topic.get('chapter') or '未明确章节'}", "",
+                          topic.get("detail", ""), ""]
+                for ref in topic.get("material_refs", []):
+                    loc = ref.get("locator", {})
+                    page = f"第 {loc['page']} 页" if "page" in loc else f"第 {loc.get('slide', '?')} 张"
+                    lines += [f"  课件：{ref['title']} · {page}", "  摘录：" + ref["quote"]]
+                cited = set(topic.get("segment_ids", []))
+                for segment in value["segments"]:
+                    if segment["id"] in cited:
+                        lines += [f"  老师原话 [{segment['start']:.0f}s]：{segment['text']}"]
         lines += ["", "## 重点提醒（请核对原文）"]
         for event in value["events"]:
             if event.get("source") == "local_rule":

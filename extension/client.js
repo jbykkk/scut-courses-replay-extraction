@@ -15,7 +15,7 @@ globalThis.AssistantClient = {
     const {token} = await this.connection();
     return this.fetchWithToken(token,path,options);
   },
-  async fetchWithToken(token,path,{method="GET",body,raw=false,timeout=20000}={}) {
+  async fetchWithToken(token,path,{method="GET",body,raw=false,blob=false,timeout=20000}={}) {
     let response;
     try {
       response = await fetch(this.base+path,{method,headers:{Authorization:`Bearer ${token}`,
@@ -29,7 +29,7 @@ globalThis.AssistantClient = {
       const result = await response.json().catch(()=>({}));
       const failure=new Error(typeof result.detail==="string"?result.detail:`本地服务 HTTP ${response.status}`);failure.status=response.status;failure.kind=response.status===401?"pairing":"http";throw failure;
     }
-    return path.endsWith("/export") ? response.blob() : response.json();
+    return blob || path.endsWith("/export") ? response.blob() : response.json();
   },
   async send(type, data={}) {
     const response = await chrome.runtime.sendMessage({type,...data});

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import re
 import zipfile
 from pathlib import Path
@@ -8,6 +9,7 @@ from urllib.parse import urlparse, parse_qs
 from xml.etree import ElementTree as ET
 
 from .storage import digest
+from .materials import register_material
 
 FORMATS = {".pdf", ".pptx", ".docx", ".md", ".txt"}
 SKIP = {".venv", "venv", "node_modules", ".git", ".codex", ".aws", "site-packages", "__pycache__",
@@ -87,6 +89,16 @@ def extract(path: Path):
             names = (["word/document.xml"] if suffix == ".docx" else
                      sorted([n for n in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)],
                             key=lambda n: int(re.search(r"slide(\d+)", n)[1])))
+            if suffix == ".pptx" and "ppt/presentation.xml" in archive.namelist():
+                presentation = ET.fromstring(archive.read("ppt/presentation.xml"))
+                relationships = ET.fromstring(archive.read("ppt/_rels/presentation.xml.rels"))
+                targets = {r.attrib["Id"]: posixpath.normpath(posixpath.join("ppt", r.attrib["Target"]))
+                           if not r.attrib["Target"].startswith("/") else r.attrib["Target"].lstrip("/")
+                           for r in relationships if r.attrib.get("TargetMode") != "External"}
+                names = [targets[node.attrib["{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"]]
+                         for node in presentation.iter() if node.tag.endswith("}sldId")]
+                if any(not re.fullmatch(r"ppt/slides/slide\d+\.xml", name) for name in names):
+                    raise ValueError("PPTX 页序关系无效，请重新导出课件")
             for index, name in enumerate(names, 1):
                 node = ET.fromstring(archive.read(name))
                 text = "\n".join(t.text or "" for t in node.iter() if t.tag.endswith("}t"))
@@ -105,8 +117,8 @@ def import_file(store, root, relative, course):
     fingerprint = hashlib.sha256(path.read_bytes()).hexdigest()
     existing = store.duplicate(course, fingerprint)
     if existing:return existing
-    return store.source(origin=str(path), course=course, title=path.name, kind="material",
-                        fingerprint=fingerprint, chunks=extract(path))
+    return register_material(store, origin=str(path), course=course, title=path.name,
+                             fingerprint=fingerprint, chunks=extract(path))
 
 
 def sync_sessions(study, sessions):

@@ -15,7 +15,7 @@ from .planner import calendar, make_plan, review_interval, stamp
 from .reasoner import Provider, Strict, run_agent
 from .storage import StudyStore, digest
 from .attachments import accept_attachment, attachment_path
-from .dialogue import converse, home
+from .dialogue import converse, home, completed_request
 from .reviews import create_review, update_review
 from .operations import OperationQueue, choose_operation
 from .knowledge import catalog, set_policy, remember_claim
@@ -67,7 +67,7 @@ class ClassroomQuery(Strict):
 
 
 class ReviewUpdate(Strict):
-    action: Literal["complete", "snooze", "pause"]
+    action: Literal["complete", "snooze", "pause", "resume"]
     rating: int | None = Field(default=None, ge=1, le=4)
 
 
@@ -357,6 +357,9 @@ def router(settings, classroom_store):
 
     @api.post("/chat")
     def chat(body: Chat):
+        cached = completed_request(study, body.model_dump())
+        if cached is not None:
+            return cached
         if not body.attachments and (body.purpose == "today" or body.purpose == "auto" and is_daily_question(body.question)):
             return converse(study, provider, settings.root, operations=operations, **body.model_dump())
         if not model_gate.acquire(blocking=False):
