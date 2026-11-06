@@ -13,9 +13,9 @@
 | 版本 | 适合谁 | 包含什么 |
 | --- | --- | --- |
 | [0.13.0 Windows 预览包][release] | 想先安装使用 | 桌面入口、实时字幕、回放整理、课程笔记、本地资料问答、复习与导出 |
-| [最新开发分支][dev] | 想用刚完成的功能 | 上述功能，以及跨课时问答、今日复习清单、WorkBuddy 接入、公开资料核对 |
+| [最新源码（main）][dev] | 想用刚完成的功能 | 上述功能，以及跨课时问答、今日复习清单、课件对照、离线思维导图、WorkBuddy 接入、公开资料核对 |
 
-**0.13.0 安装包尚不包含开发版新增功能。** 当前 GitHub 默认分支也未合入这些改动；使用新功能请按下方“从源码运行”切换到开发分支。[开发进度见 PR #1][pr]。
+**0.13.0 安装包尚不包含源码中的新增功能。** 最新源码位于 GitHub 默认分支 `main`；使用新功能请按下方“从源码运行”安装。[合并记录见 PR #1][pr]。
 
 ![学习助手主界面][study-image]
 
@@ -168,10 +168,10 @@ WorkBuddy 与学习网页共用本机资料索引。**查已有资料时，直�
 
 ## 从源码运行
 
-最新学习助手功能目前位于 `codex/student-agent-foundation` 分支。需要 Git、[uv](https://docs.astral.sh/uv/) 和 Windows；回归检查另需 Node.js。
+最新学习助手功能位于 `main` 分支。需要 Git、[uv](https://docs.astral.sh/uv/) 和 Windows；回归检查另需 Node.js。
 
 ```powershell
-git clone --branch codex/student-agent-foundation --single-branch https://github.com/PoesisQ/bbt_SCUT_admin.git
+git clone https://github.com/PoesisQ/bbt_SCUT_admin.git
 cd bbt_SCUT_admin
 uv sync --extra asr --extra study --python 3.12
 # 首次创建桌面与开始菜单入口，以后从图标打开
@@ -226,16 +226,16 @@ uv run main.py get --all "课程链接"
 [release]: https://github.com/PoesisQ/bbt_SCUT_admin/releases/tag/v0.13.0
 [android]: https://github.com/PoesisQ/bbt_SCUT_admin/releases/download/v0.10.7/SCUT-Classroom-Alerts-v0.10.7.apk
 [issues]: https://github.com/PoesisQ/bbt_SCUT_admin/issues
-[dev]: https://github.com/PoesisQ/bbt_SCUT_admin/tree/codex/student-agent-foundation
+[dev]: https://github.com/PoesisQ/bbt_SCUT_admin/tree/main
 [pr]: https://github.com/PoesisQ/bbt_SCUT_admin/pull/1
-[start]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/manual/START.md
-[workbuddy]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/workbuddy/README.md
-[mobile]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/mobile/README.md
-[changelog]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/CHANGELOG.md
-[design]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/planning/STUDY_TECHNICAL.md
-[site]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/SITE_FINDINGS.md
-[validation]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/VALIDATION.md
-[releasing]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/manual/RELEASING.md
+[start]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/manual/START.md
+[workbuddy]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/workbuddy/README.md
+[mobile]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/mobile/README.md
+[changelog]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/CHANGELOG.md
+[design]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/planning/STUDY_TECHNICAL.md
+[site]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/SITE_FINDINGS.md
+[validation]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/VALIDATION.md
+[releasing]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/manual/RELEASING.md
 [study-image]: https://raw.githubusercontent.com/PoesisQ/bbt_SCUT_admin/59ac3f008901249b98858e4ce0f3bd99373101cc/manual/images/02-study.png
 [school-image]: https://raw.githubusercontent.com/PoesisQ/bbt_SCUT_admin/59ac3f008901249b98858e4ce0f3bd99373101cc/manual/images/03-school.png
 [task-image]: https://raw.githubusercontent.com/PoesisQ/bbt_SCUT_admin/59ac3f008901249b98858e4ce0f3bd99373101cc/manual/images/05-task.png
