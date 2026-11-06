@@ -1,0 +1,15 @@
+# Desktop runtime. The legacy CLI's Playwright browser is deliberately separate.
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+httpx>=0.28,<1
+m3u8>=6,<7
+cryptography>=44,<47
+qrcode>=8,<9
+pypdf>=6,<7
+pdfplumber>=0.11,<0.12
+reportlab>=4,<5
+Pillow>=11,<14
+faster-whisper>=1.1,<2
+ctranslate2==4.4.0
+numpy>=1.26,<3
+setuptools<81

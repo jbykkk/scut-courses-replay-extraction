@@ -1,0 +1,26 @@
+{
+  "selected": "deepseek",
+  "providers": [
+    {
+      "id": "deepseek",
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-flash",
+      "use_saved_deepseek_key": true,
+      "json_mode": true,
+      "disable_thinking": true
+    },
+    {
+      "id": "local",
+      "base_url": "http://127.0.0.1:1234/v1",
+      "model": "replace-with-your-local-model-id",
+      "json_mode": true
+    },
+    {
+      "id": "other-provider",
+      "base_url": "https://replace-with-provider-host.example/v1",
+      "model": "replace-with-model-id",
+      "key_env": "STUDY_MODEL_API_KEY",
+      "json_mode": true
+    }
+  ]
+}

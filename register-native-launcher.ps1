@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSEdition -eq 'Core') {
     & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath
     if ($LASTEXITCODE -ne 0) { throw 'Native launcher registration failed.' }
@@ -8,6 +8,7 @@ $scutNativeRoot = $PSScriptRoot
 $scutNativeState = Join-Path $scutNativeRoot '.local'
 New-Item -ItemType Directory -Force -Path $scutNativeState | Out-Null
 $scutNativePython = Join-Path $scutNativeRoot '.venv\Scripts\python.exe'
+if (Test-Path -LiteralPath (Join-Path $scutNativeRoot 'runtime\python.exe')) { $scutNativePython = Join-Path $scutNativeRoot 'runtime\python.exe' }
 if (-not (Test-Path -LiteralPath $scutNativePython)) { return }
 $scutDiscovery = @'
 import json,os,re,sys

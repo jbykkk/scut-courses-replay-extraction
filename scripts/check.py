@@ -42,7 +42,7 @@ def main() -> None:
 
     node = require_command("node")
     git = require_command("git")
-    git_command = [git, "-c", f"safe.directory={root}"]
+    git_command = [git, "-c", f"safe.directory={root.as_posix()}"]
     failures: list[str] = []
 
     def check(label: str, command: list[str]) -> None:

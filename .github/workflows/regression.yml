@@ -30,10 +30,10 @@ jobs:
           enable-cache: true
 
       - name: Sync locked dependencies
-        run: uv sync --locked
+        run: uv sync --extra study --locked
 
       - name: Run regression checks
         env:
           CHECK_BASE_REF: ${{ github.base_ref }}
           CHECK_BEFORE_SHA: ${{ github.event.before }}
-        run: uv run python scripts/check.py
+        run: uv run --extra study python scripts/check.py

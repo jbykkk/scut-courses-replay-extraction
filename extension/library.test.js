@@ -1,6 +1,21 @@
 const test=require("node:test"),assert=require("node:assert/strict"),L=require("./library-core.js");
 const lesson={id:"a",course_id:"1",course_title:"课程",stopped:true,status:"complete",segment_count:1418,analysis_status:"failed",warning:"输出截断",summary:null};
 
+test("lesson cards sort by class date and time even when imports arrive out of order or timestamps are missing",()=>{
+  const epoch=value=>Date.parse(value+"+08:00")/1000;
+  const records=[
+    {id:"morning",title:"2026-11-02 8:00-09:40",created_at:epoch("2026-11-05T12:00:00")},
+    {id:"scheduled",start_at:epoch("2026-11-04T08:00:00"),created_at:1},
+    {id:"evening",title:"2026年11月2日 19:00-20:40",created_at:2},
+    {id:"other-version",title:"课堂录音",created_at:3,versions:[{start_at:epoch("2026-11-03T10:00:00")}]},
+    {id:"date-only",title:"2026-11-01",created_at:epoch("2026-11-06T12:00:00")},
+    {id:"legacy",title:"旧记录",created_at:epoch("2026-10-30T12:00:00")},
+    {id:"undated",start_at:"invalid",created_at:null},
+  ];
+  assert.deepEqual([...records].sort(L.compareLessons).map(s=>s.id),["scheduled","other-version","evening","morning","date-only","legacy","undated"]);
+  assert.equal(records[0].id,"morning");
+});
+
 test("saved subtitles wait for automatic notes and retry with a bounded backoff",()=>{
   assert.deepEqual(L.action({...lesson,analysis_status:"idle"},true),{label:"等待自动生成笔记",disabled:true});
   assert.equal(L.action({...lesson,notes_retry_at:Date.now()/1000+60,notes_auto_attempts:1},true).label,"稍后自动重试");

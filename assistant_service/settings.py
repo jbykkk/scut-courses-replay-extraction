@@ -4,12 +4,19 @@ import base64
 import ctypes
 import json
 import os
+import re
 import secrets
 import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_ALIASES = {"deepseek-v4-flash": "deepseek-flash"}
+LLM_PROVIDERS = {
+    "deepseek": {"label": "DeepSeek", "base_url": "https://api.deepseek.com",
+                 "model_key": "deepseek_model", "token_param": "max_tokens"},
+    "openai": {"label": "ChatGPT", "base_url": "https://api.openai.com/v1",
+               "model_key": "openai_model", "token_param": "max_completion_tokens"},
+}
 
 
 def atomic_json(path: Path, value: object) -> None:
@@ -22,7 +29,7 @@ def atomic_json(path: Path, value: object) -> None:
 def protect(value: str, decrypt: bool = False) -> str:
     """Windows user-bound DPAPI. Never persist plaintext API keys on other OSes."""
     if os.name != "nt":
-        raise ValueError("此系统请使用 DEEPSEEK_API_KEY 环境变量")
+        raise ValueError("此系统请使用环境变量配置 API Key")
 
     class Blob(ctypes.Structure):
         _fields_ = [("size", ctypes.c_ulong), ("data", ctypes.POINTER(ctypes.c_char))]
@@ -48,7 +55,9 @@ class Settings:
         # share a Windows-user vault across checkouts and application upgrades.
         self.vault = (vault_root or (root / "private" if root is not None else
                       Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "SCUTClassroomAssistant")) / "credentials.json"
-        self.root = root or Path(os.getenv("SCUT_ASSISTANT_HOME", str(ROOT / ".local")))
+        default_root = (Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "SCUTClassroomAssistant" / "data"
+                        if (ROOT / "installed.json").is_file() else ROOT / ".local")
+        self.root = root or Path(os.getenv("SCUT_ASSISTANT_HOME", str(default_root)))
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "settings.json"
         pot = Path(os.getenv("APPDATA", str(Path.home()))) / "PotPlayerMini64"
@@ -60,8 +69,10 @@ class Settings:
             "ffmpeg_path": str(engine / "ffmpeg.exe"),
             "model_path": str(pot / "Model" / "faster-whisper-large-v3-turbo"),
             "device": "cuda", "compute_type": "int8_float16", "language": "auto",
-            "hotwords": "", "deepseek_model": "deepseek-flash",
-            "deepseek_key_encrypted": "", "analysis_window": 35,
+            "hotwords": "", "deepseek_model": "deepseek-flash", "llm_provider": "deepseek",
+            "openai_model": "gpt-5-mini", "asr_api_model": "gpt-transcribe",
+            "deepseek_key_encrypted": "", "analysis_window": 35, "asr_workers": 4,
+            "analysis_workers": 4, "analysis_parallelism": 3,
             "media_hosts": [], "retain_audio": False,
             "mobile_notifications_enabled": False,
         }
@@ -111,6 +122,27 @@ class Settings:
                 raise ValueError("本机密钥文件无法读取，请在设置中重新保存 Key") from None
         return protect(encrypted, True) if encrypted else ""
 
+    def openai_key(self) -> str:
+        if key := os.getenv("OPENAI_API_KEY", "").strip():
+            return key
+        encrypted = ""
+        if self.vault.exists():
+            try:
+                encrypted = json.loads(self.vault.read_text(encoding="utf-8")).get("openai_key_encrypted", "")
+            except (ValueError, OSError):
+                raise ValueError("本机密钥文件无法读取，请在设置中重新保存 Key") from None
+        return protect(encrypted, True) if encrypted else ""
+
+    def llm(self) -> dict:
+        provider = self.data.get("llm_provider", "deepseek")
+        spec = LLM_PROVIDERS.get(provider, LLM_PROVIDERS["deepseek"])
+        model = self.data.get(spec["model_key"], "")
+        # GPT-5+/o-series reject a non-default temperature; omit it for those.
+        fixed_temperature = provider == "openai" and bool(re.match(r"o\d|gpt-([5-9]|\d{2,})", model))
+        return {"provider": provider, "label": spec["label"], "base_url": spec["base_url"],
+                "model": model, "key": self.openai_key() if provider == "openai" else self.key(),
+                "token_param": spec["token_param"], "temperature": None if fixed_temperature else 0.1}
+
     def _vault_data(self) -> dict:
         if not self.vault.exists():
             return {}
@@ -157,6 +189,21 @@ class Settings:
         except ValueError:
             result["deepseek_configured"] = False
             result["deepseek_key_status"] = "unreadable"
+        try:
+            result["openai_configured"] = bool(self.openai_key())
+            result["openai_key_status"] = ("environment" if os.getenv("OPENAI_API_KEY", "").strip() else "saved") if result["openai_configured"] else "missing"
+        except ValueError:
+            result["openai_configured"] = False
+            result["openai_key_status"] = "unreadable"
+        try:
+            llm = self.llm()
+            result["llm_configured"] = bool(llm["key"])
+            result["llm_label"] = llm["label"]
+            result["llm_model"] = llm["model"]
+        except ValueError:
+            result["llm_configured"] = False
+            result["llm_label"] = "AI 服务"
+            result["llm_model"] = ""
         result["deepseek_key_location"] = str(self.vault)
         try:
             result["mobile_notifications_configured"] = bool(self.mobile_pairing())
@@ -175,6 +222,10 @@ class Settings:
             if patch.get("clear_deepseek_key"):
                 self._update_vault(deepseek_key_encrypted="")
                 self.data["deepseek_key_encrypted"] = ""
+            if key := str(patch.get("openai_key") or "").strip():
+                self._update_vault(openai_key_encrypted=protect(key))
+            if patch.get("clear_openai_key"):
+                self._update_vault(openai_key_encrypted="")
             allowed = set(self.data) - {"token", "deepseek_key_encrypted"}
             for k, v in patch.items():
                 if k in allowed:

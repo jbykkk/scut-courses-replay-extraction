@@ -1,7 +1,8 @@
 /* Shared by trusted extension pages and the loopback dashboard. Never injected into the school page. */
 globalThis.AssistantClient = {
   launchURL: "scut-classroom://start",
-  base: "http://127.0.0.1:8765",
+  base: globalThis.location?.protocol === "http:" && ["127.0.0.1","localhost"].includes(globalThis.location?.hostname)
+    ? globalThis.location.origin : "http://127.0.0.1:8765",
   async connection() {
     if (globalThis.chrome?.storage?.local) return chrome.storage.local.get({token:"", desktopAlerts:false});
     return {token: sessionStorage.getItem("scut-token") || ""};
@@ -14,7 +15,7 @@ globalThis.AssistantClient = {
     const {token} = await this.connection();
     return this.fetchWithToken(token,path,options);
   },
-  async fetchWithToken(token,path,{method="GET",body,raw=false,timeout=20000}={}) {
+  async fetchWithToken(token,path,{method="GET",body,raw=false,blob=false,timeout=20000}={}) {
     let response;
     try {
       response = await fetch(this.base+path,{method,headers:{Authorization:`Bearer ${token}`,
@@ -28,7 +29,7 @@ globalThis.AssistantClient = {
       const result = await response.json().catch(()=>({}));
       const failure=new Error(typeof result.detail==="string"?result.detail:`本地服务 HTTP ${response.status}`);failure.status=response.status;failure.kind=response.status===401?"pairing":"http";throw failure;
     }
-    return path.endsWith("/export") ? response.blob() : response.json();
+    return blob || path.endsWith("/export") ? response.blob() : response.json();
   },
   async send(type, data={}) {
     const response = await chrome.runtime.sendMessage({type,...data});

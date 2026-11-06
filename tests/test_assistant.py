@@ -77,6 +77,19 @@ class APITests(unittest.TestCase):
         self.assertTrue(Path(setup["extension_path"]).joinpath("manifest.json").is_file())
         self.assertNotIn(self.settings.data["token"], json.dumps(setup))
 
+    def test_static_assets_keep_browser_types_with_incorrect_windows_mime_types(self):
+        # FileResponse normally guesses MIME types from Windows registry entries.
+        assets = {"/": "text/html", "/study.html": "text/html", "/client.js": "text/javascript",
+                  "/study-tools.js": "text/javascript", "/study-conversation.js": "text/javascript",
+                  "/options.js": "text/javascript", "/study.css": "text/css", "/brand.png": "image/png"}
+        with patch("starlette.responses.guess_type", return_value=("text/plain", None)):
+            for path, expected in assets.items():
+                with self.subTest(path=path):
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.headers["content-type"].split(";")[0], expected)
+                    self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+
     def test_course_list_includes_every_confirmed_event_category(self):
         sid = self.create()
         categories = ("attendance", "qr", "question", "assignment", "quiz", "schedule", "grading", "requirements", "reminder")
@@ -314,6 +327,12 @@ class APITests(unittest.TestCase):
         self.assertIsNone(self.store.claim("asr"))
         self.assertEqual(self.store.get(sid)["status"], "cancelled")
 
+    def test_asr_lane_scales_with_configured_workers(self):
+        self.settings.data["asr_workers"] = 3
+        with patch.object(self.manager.mobile, "start"), patch.object(self.manager, "worker"):
+            self.manager.start()
+        self.assertEqual(sum(t.name.startswith("scut-asr-") for t in self.manager.threads), 3)
+
     def test_live_audio_has_priority_over_replay(self):
         sid = self.create()
         self.store.enqueue(sid, "chunk", {}, priority=20, key="replay")
@@ -348,6 +367,7 @@ class APITests(unittest.TestCase):
         self.assertIn("没有识别出可用语音", session["error"])
 
     def test_summary_yields_between_packs_to_realtime_analysis(self):
+        self.settings.data["analysis_parallelism"] = 1
         archive = self.create(mode="subtitle")
         live = self.create()
         self.store.update(archive, analysis=True, segments=[{"id": f"archive-{i}", "start": i*10, "end": i*10+9, "text": "课程内容"*800} for i in range(4)])
@@ -421,6 +441,85 @@ class AnalysisTests(unittest.TestCase):
             with patch.object(settings, "key", return_value="test-only-key"):
                 result = Analyzer(settings, httpx.MockTransport(handler)).analyze(self.segments)
             self.assertEqual(result["overview"], "测试")
+
+    def test_openai_request_contract_uses_completion_tokens_and_saved_key(self):
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Settings(Path(temp))
+            settings.data["llm_provider"] = "openai"
+            def handler(request):
+                body = json.loads(request.content)
+                self.assertEqual(str(request.url), "https://api.openai.com/v1/chat/completions")
+                self.assertEqual(request.headers["authorization"], "Bearer openai-test-key")
+                self.assertEqual(body["model"], "gpt-5-mini")
+                self.assertIn("max_completion_tokens", body)
+                self.assertNotIn("max_tokens", body)
+                # GPT-5 rejects a non-default temperature, so the field is omitted.
+                self.assertNotIn("temperature", body)
+                self.assertEqual(body["response_format"], {"type": "json_object"})
+                self.assertNotIn("thinking", body)
+                return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": '{"events":[],"topics":[],"overview":"测试"}'}}]})
+            with patch.object(settings, "openai_key", return_value="openai-test-key"), \
+                 patch.object(settings, "key", return_value="wrong-provider-key"):
+                result = Analyzer(settings, httpx.MockTransport(handler)).analyze(self.segments)
+            self.assertEqual(result["overview"], "测试")
+
+    def test_openai_legacy_models_still_send_temperature(self):
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Settings(Path(temp))
+            settings.data.update(llm_provider="openai", openai_model="gpt-4o-mini")
+            def handler(request):
+                body = json.loads(request.content)
+                self.assertEqual(body["temperature"], 0.1)
+                return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": '{"events":[],"topics":[],"overview":""}'}}]})
+            with patch.object(settings, "openai_key", return_value="openai-test-key"):
+                Analyzer(settings, httpx.MockTransport(handler)).analyze(self.segments)
+
+    def test_openai_newer_models_omit_temperature(self):
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Settings(Path(temp))
+            settings.data["llm_provider"] = "openai"
+            for model in ("gpt-5-mini", "gpt-6.1-sol", "o3-mini", "gpt-10"):
+                settings.data["openai_model"] = model
+                self.assertIsNone(settings.llm()["temperature"], model)
+
+    def test_temperature_rejected_by_model_retries_without_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Settings(Path(temp))
+            settings.data.update(llm_provider="openai", openai_model="gpt-4o-mini")
+            sent = []
+            def handler(request):
+                sent.append("temperature" in json.loads(request.content))
+                if len(sent) == 1:
+                    return httpx.Response(400, json={"error": {"param": "temperature",
+                        "message": "Unsupported value: 'temperature' does not support 0.1 with this model."}})
+                return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": '{"events":[],"topics":[],"overview":"测试"}'}}]})
+            with patch.object(settings, "openai_key", return_value="openai-test-key"):
+                result = Analyzer(settings, httpx.MockTransport(handler)).analyze(self.segments)
+            self.assertEqual(sent, [True, False])
+            self.assertEqual(result["overview"], "测试")
+
+    def test_pool_timeout_rebuilds_client_and_recovers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Settings(Path(temp))
+            settings.data.update(llm_provider="openai", openai_model="gpt-4o-mini")
+            sent = []
+            def handler(request):
+                sent.append(request)
+                if len(sent) == 1:
+                    raise httpx.PoolTimeout("pool saturated by dead tunnels")
+                return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": '{"events":[],"topics":[],"overview":"恢复"}'}}]})
+            resets, real_reset = [], Analyzer._reset_client
+            def counting_reset(analyzer, provider):
+                resets.append(provider)
+                return real_reset(analyzer, provider)
+            with patch.object(settings, "openai_key", return_value="openai-test-key"), \
+                 patch.object(Analyzer, "_reset_client", counting_reset):
+                analyzer = Analyzer(settings, httpx.MockTransport(handler))
+                result = analyzer.analyze(self.segments)
+            self.assertEqual(resets, ["openai"])
+            self.assertEqual(len(sent), 2)
+            self.assertEqual(result["overview"], "恢复")
+            self.assertIsNotNone(analyzer.proxy_client)
 
     def test_overlap_deduplicates_boundary_but_keeps_later_repetition(self):
         previous = [{"id": "a", "chunk": "a", "start": 0, "end": 8, "text": "今天布置课后作业"}]

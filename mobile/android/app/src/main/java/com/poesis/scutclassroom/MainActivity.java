@@ -9,6 +9,8 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.*;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.*;
 import android.widget.*;
 import com.google.zxing.integration.android.IntentIntegrator;
@@ -24,6 +26,7 @@ public class MainActivity extends Activity {
     Switch enabled;
     boolean showPairing;
     String historySnapshot;
+    String filter="all", searchText="";
     final Handler ui = new Handler(Looper.getMainLooper());
     final Runnable refreshLoop = new Runnable() {
         @Override public void run() { refreshDashboard(); ui.postDelayed(this, 2000); }
@@ -62,7 +65,7 @@ public class MainActivity extends Activity {
         row.addView(logo,new LinearLayout.LayoutParams(dp(46),dp(46)));
         LinearLayout words=new LinearLayout(this); words.setOrientation(LinearLayout.VERTICAL); words.setPadding(dp(10),0,0,0);
         TextView name=text("课堂提醒",18,ink); name.setTypeface(Typeface.DEFAULT,Typeface.BOLD); words.addView(name);
-        TextView sub=text("SCUT  ·  PRIVATE",9,muted); sub.setLetterSpacing(.16f); words.addView(sub,margin(0,2,0,0));
+        TextView sub=text("SCUT",9,muted); sub.setLetterSpacing(.16f); words.addView(sub,margin(0,2,0,0));
         row.addView(words,new LinearLayout.LayoutParams(0,-2,1));
         TextView badge=text(paired?"已配对":"待配对",11,paired?green:muted); connectionBadge=badge; badge.setGravity(Gravity.CENTER);
         badge.setBackground(round(paired?Color.rgb(234,248,240):Color.rgb(238,240,245),99,0,Color.TRANSPARENT));
@@ -71,16 +74,16 @@ public class MainActivity extends Activity {
     }
 
     void renderWelcome() {
-        TextView mark=text("STAY IN THE MOMENT",10,blue); mark.setLetterSpacing(.20f); root.addView(mark,margin(0,42,0,0));
-        TextView title=text("离开电脑，\n也不会错过课堂。",33,ink); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); title.setLineSpacing(0,.96f); root.addView(title,margin(0,14,0,0));
-        root.addView(text("点名、扫码、提问、课堂测试、作业与课程安排，会在这里形成一条清晰的时间线。",15,muted),margin(0,16,0,28));
+        TextView mark=text("SCUT",10,blue); mark.setLetterSpacing(.20f); root.addView(mark,margin(0,42,0,0));
+        TextView title=text("连接课堂提醒",33,ink); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); title.setLineSpacing(0,.96f); root.addView(title,margin(0,14,0,0));
+        root.addView(text("接收电脑发来的课堂事项和复习提醒。",15,muted),margin(0,16,0,28));
         root.addView(pairingCard("连接电脑", "扫描电脑上的私人配对码，提醒只在你的设备上解密。"));
     }
 
     void renderCenter() {
-        TextView mark=text("LIVE NOTEBOOK",10,blue); mark.setLetterSpacing(.20f); root.addView(mark,margin(0,38,0,0));
-        TextView title=text("课堂提醒",34,ink); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title,margin(0,9,0,0));
-        root.addView(text("按发生时间整理重要事项。锁屏通知与这里的记录会保持一致。",14,muted),margin(0,8,0,20));
+        TextView mark=text("SCUT",10,blue); mark.setLetterSpacing(.20f); root.addView(mark,margin(0,38,0,0));
+        TextView title=text("收件箱",30,ink); title.setTypeface(Typeface.DEFAULT,Typeface.BOLD); root.addView(title,margin(0,9,0,0));
+        root.addView(text("课堂事项和复习分开查看。离线时仍可搜索本机记录。",14,muted),margin(0,8,0,20));
 
         LinearLayout status=card(Color.WHITE);
         LinearLayout top=new LinearLayout(this); top.setGravity(Gravity.CENTER_VERTICAL);
@@ -105,10 +108,17 @@ public class MainActivity extends Activity {
         });
 
         LinearLayout heading=new LinearLayout(this); heading.setGravity(Gravity.CENTER_VERTICAL);
-        TextView recent=text("提醒时间线",21,ink); recent.setTypeface(Typeface.DEFAULT,Typeface.BOLD); heading.addView(recent,new LinearLayout.LayoutParams(0,-2,1));
+        TextView recent=text("最近收到",21,ink); recent.setTypeface(Typeface.DEFAULT,Typeface.BOLD); heading.addView(recent,new LinearLayout.LayoutParams(0,-2,1));
         Button clear=linkButton("清空"); heading.addView(clear,new LinearLayout.LayoutParams(-2,dp(42))); root.addView(heading,margin(0,27,0,2));
         clear.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("清空本机提醒？").setMessage("只删除手机上的缓存，不影响电脑课程笔记。")
             .setNegativeButton("取消",null).setPositiveButton("清空",(d,w)->{History.clear(this);refreshDashboard();}).show());
+        HorizontalScrollView choices=new HorizontalScrollView(this); choices.setHorizontalScrollBarEnabled(false);
+        LinearLayout chips=new LinearLayout(this);
+        String[] keys={"all","unread","class","review","assignment"}, titles={"全部","未读","课堂","复习","作业 / 测验"};
+        for(int k=0;k<keys.length;k++){final String selected=keys[k];Button b=button(titles[k],false);b.setTextColor(filter.equals(selected)?blue:muted);chips.addView(b,new LinearLayout.LayoutParams(-2,dp(44)));b.setOnClickListener(v->{filter=selected;historySnapshot=null;refreshDashboard();for(int j=0;j<chips.getChildCount();j++)((Button)chips.getChildAt(j)).setTextColor(chips.getChildAt(j)==v?blue:muted);});}
+        choices.addView(chips);root.addView(choices,margin(0,5,0,10));
+        EditText search=new EditText(this);search.setSingleLine(true);search.setTextSize(14);search.setHint("搜索课程、事项、复习内容");search.setText(searchText);search.setPadding(dp(14),0,dp(14),0);search.setBackground(round(Color.WHITE,14,1,line));root.addView(search,marginHeight(0,0,0,8,48));
+        search.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){searchText=s.toString();historySnapshot=null;refreshDashboard();}public void afterTextChanged(Editable e){}});
         history=new LinearLayout(this); history.setOrientation(LinearLayout.VERTICAL); root.addView(history);
 
         LinearLayout tools=card(Color.rgb(251,248,246));
@@ -159,7 +169,7 @@ public class MainActivity extends Activity {
         connectionBadge.setText(!on?"已暂停":connected?"已连接":"连接中");
         connectionBadge.setTextColor(connected?green:muted);
         errorView.setText(on?err:""); errorView.setVisibility(on&&!err.isEmpty()?View.VISIBLE:View.GONE);
-        String snapshot=rows.toString();
+        String snapshot=rows.toString()+filter+searchText+Pairing.prefs(this).getString("read_ids","[]");
         if(!snapshot.equals(historySnapshot)){historySnapshot=snapshot;renderHistory(rows);}
         if(emptyTitle!=null)emptyTitle.setText(connected?"等待下一条课堂提醒":!on?"提醒已暂停":"正在连接，已有记录会保留");
     }
@@ -171,20 +181,32 @@ public class MainActivity extends Activity {
             TextView title=text("正在连接课堂信箱",16,ink);emptyTitle=title;title.setTypeface(Typeface.DEFAULT,Typeface.BOLD);title.setGravity(Gravity.CENTER);empty.addView(title,margin(0,8,0,0));
             TextView desc=text("收到的信息会自动出现在这里，无需重新打开 App。",12,muted);desc.setGravity(Gravity.CENTER);empty.addView(desc,margin(0,7,0,0)); history.addView(empty,margin(0,12,0,0)); return;
         }
-        for(int i=0;i<Math.min(rows.length(),200);i++) {
+        ArrayList<JSONObject> ordered=new ArrayList<>();
+        for(int n=0;n<rows.length();n++){JSONObject e=rows.optJSONObject(n);if(e!=null&&e.optJSONObject("d")!=null)ordered.add(e);}
+        ordered.sort((a,b)->Long.compare(eventTime(b,b.optJSONObject("d")),eventTime(a,a.optJSONObject("d"))));
+        int shown=0;
+        for(int i=0;i<Math.min(ordered.size(),200);i++) {
             try {
-                JSONObject env=rows.getJSONObject(i), d=env.getJSONObject("d"); int accent=categoryColor(d.optString("category"));
+                JSONObject env=ordered.get(i), d=env.getJSONObject("d");
+                String id=env.optString("id"),category=d.optString("category"),source=d.optString("source");boolean isReview="study-review".equals(source),read=History.isRead(this,id);
+                if((filter.equals("unread")&&read)||(filter.equals("review")&&!isReview)||(filter.equals("class")&&isReview)||(filter.equals("assignment")&&!category.equals("assignment")&&!category.equals("quiz")))continue;
+                String haystack=(d.optString("course")+" "+d.optString("lesson")+" "+d.optString("message")+" "+details(d.optJSONObject("details"))).toLowerCase(Locale.ROOT);
+                if(!haystack.contains(searchText.toLowerCase(Locale.ROOT)))continue;
+                shown++;int accent=isReview?green:categoryColor(category);
                 LinearLayout item=card(Color.WHITE);
                 LinearLayout top=new LinearLayout(this); top.setGravity(Gravity.CENTER_VERTICAL);
-                TextView tag=text(categoryName(d),11,accent); tag.setGravity(Gravity.CENTER); tag.setTypeface(Typeface.DEFAULT,Typeface.BOLD); tag.setBackground(round(tint(accent),99,0,Color.TRANSPARENT)); top.addView(tag,new LinearLayout.LayoutParams(dp(72),dp(30)));
+                TextView tag=text(isReview?"复习":categoryName(d),11,accent); tag.setGravity(Gravity.CENTER); tag.setTypeface(Typeface.DEFAULT,Typeface.BOLD); tag.setBackground(round(tint(accent),99,0,Color.TRANSPARENT)); top.addView(tag,new LinearLayout.LayoutParams(dp(72),dp(30)));
                 long when=eventTime(env,d); TextView time=text(timeLabel(when),12,ink); time.setGravity(Gravity.END); time.setTypeface(Typeface.DEFAULT,Typeface.BOLD); top.addView(time,new LinearLayout.LayoutParams(0,-2,1)); item.addView(top);
                 String course=d.optString("course","当前课程"),lesson=d.optString("lesson",""); TextView courseView=text(course+(lesson.isEmpty()?"":"  ·  "+lesson),12,muted); item.addView(courseView,margin(0,13,0,0));
-                TextView msg=text(d.optString("message","请查看课堂信息"),17,ink); msg.setTypeface(Typeface.DEFAULT,Typeface.BOLD); item.addView(msg,margin(0,6,0,0));
+                TextView msg=text(d.optString("message","请查看课堂信息"),17,ink); msg.setTypeface(Typeface.DEFAULT,Typeface.BOLD); item.addView(msg,margin(0,6,0,0));msg.setTextIsSelectable(true);
                 String detail=details(d.optJSONObject("details")); if(!detail.isEmpty()) item.addView(text(detail,13,muted),margin(0,10,0,0));
-                String classAt=classTime(d.optDouble("start",-1)); if(!classAt.isEmpty()) item.addView(text("课堂时间  "+classAt,11,muted),margin(0,12,0,0));
+                String classAt=isReview?"":classTime(d.optDouble("start",-1)); if(!classAt.isEmpty()) item.addView(text("课堂时间  "+classAt,11,muted),margin(0,12,0,0));
+                if(isReview){int minutes=d.optJSONObject("details")==null?5:d.optJSONObject("details").optInt("estimated_minutes",5);item.addView(text("预计 "+minutes+" 分钟 · 作答和调整时间请回电脑学习页",12,muted),margin(0,10,0,0));}
+                Button mark=linkButton(read?"已读 · 设为未读":"标为已读");mark.setOnClickListener(v->{History.setRead(this,id,!read);historySnapshot=null;refreshDashboard();});item.addView(mark,marginHeight(0,10,0,0,40));
                 history.addView(item,margin(0,12,0,0));
             } catch(Exception ignored) {}
         }
+        if(shown==0)history.addView(text("没有符合筛选的记录",14,muted),margin(0,20,0,10));
     }
 
     String categoryName(JSONObject d) {

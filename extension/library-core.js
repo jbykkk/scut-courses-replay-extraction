@@ -11,11 +11,18 @@
     {id:"grading",label:"评分"},{id:"requirements",label:"课程要求"},{id:"reminder",label:"特别提醒"}
   ];
   function lessonTime(s){
-    if(Number(s.start_at)>0)return Number(s.start_at);
-    const date=String(s.title||"").match(/\d{4}-\d{2}-\d{2}/);
-    const parsed=date?Date.parse(date[0]+"T00:00:00+08:00")/1000:0;
-    return Number.isFinite(parsed)&&parsed>0?parsed:Number(s.created_at)||0;
+    const versions=[s,...(s.versions||[])];
+    for(const version of versions){const start=Number(version.start_at);if(Number.isFinite(start)&&start>0)return start;}
+    for(const version of versions){
+      const date=String(version.title||"").match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+      if(!date)continue;
+      const [year,month,day,hour,minute,second]=date.slice(1).map(value=>(value||"0").padStart(2,"0"));
+      const parsed=Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}+08:00`)/1000;
+      if(Number.isFinite(parsed)&&parsed>0)return parsed;
+    }
+    const created=Number(s.created_at);return Number.isFinite(created)&&created>0?created:0;
   }
+  function compareLessons(a,b){return lessonTime(b)-lessonTime(a);}
   function lessons(records){
     const map=new Map();
     for(const s of records){const key=s.course_id+":"+s.sub_id;if(!map.has(key))map.set(key,[]);map.get(key).push(s);}
@@ -64,7 +71,7 @@
     if(s.analysis_status === "failed")return s.notes_retry_at>Date.now()/1000&&s.notes_auto_attempts<3?{label:"稍后自动重试",disabled:true}:{label:"继续生成笔记"};
     return {label:"等待自动生成笔记",disabled:true};
   }
-  const api={groups,lessons,titles,hasNotes,needsNotes,pending,importRows,busy,action,eventCategories,eventTimeline};
+  const api={groups,lessons,titles,hasNotes,needsNotes,pending,importRows,busy,action,eventCategories,eventTimeline,compareLessons};
   if(typeof module!=="undefined"&&module.exports)module.exports=api;
   root.CourseLibrary=api;
 })(globalThis);

@@ -1,8 +1,18 @@
 const A=AssistantClient,L=CourseLibrary,$=id=>document.getElementById(id),isExtension=!!globalThis.chrome?.runtime?.id;
-let sessions=[],imports=[],trashed=[],selected=null,detail=null,catalogue=[],catalogueCourse="",loading=false,detailStamp=0,listStamp="",course="",filter="lessons",eventCategory="all",focusedEventId=null,configured=false;
+let sessions=[],imports=[],trashed=[],selected=null,detail=null,catalogue=[],catalogueCourse="",loading=false,detailStamp=0,listStamp="",course="",filter="lessons",eventCategory="all",focusedEventId=null,configured=false,llmLabel="AI";
 const eventCache=new Map();
 let eventHydration=null,noticeSource="";
 let catalogueContext=null,catalogueRequest=0,sourceTabs=new Map(),sourceRefresh=0;
+function initCourseRail(){
+  const toggle=$("toggle-courses"),rail=$("course-rail"),layout=$("library-layout");
+  if(!toggle||!rail||!layout)return;
+  const key="scut.library.coursesHidden";let hidden=false;
+  try{hidden=localStorage.getItem(key)==="1";}catch{ /* Layout still works when browser storage is unavailable. */ }
+  function apply(){rail.hidden=hidden;layout.classList.toggle("courses-hidden",hidden);toggle.textContent=hidden?"展开我的课程":"收起我的课程";toggle.setAttribute("aria-expanded",String(!hidden));}
+  toggle.onclick=()=>{hidden=!hidden;apply();try{localStorage.setItem(key,hidden?"1":"0");}catch{ /* Keep this page's selection. */ }};
+  apply();
+}
+initCourseRail();
 function sourceCourse(url){try{const u=new URL(url);return u.origin+"/"+u.searchParams.get("course_id")+"/"+(u.searchParams.get("tenant_code")||"21");}catch{return "";}}
 async function refreshSourceTabs(){
   if(!isExtension)return;
@@ -52,6 +62,9 @@ function seek(sec){if(detail.time_basis==="capture")return node("span",clock(sec
 async function act(button,fn){button.disabled=true;try{await fn();}catch(e){status(e.message,true);}finally{button.disabled=button.id==="start-batch"&&(!catalogueContext||!catalogue.length);if(detail)renderAction();}}
 function matches(value){return !$("search").value.trim()||JSON.stringify(value).toLowerCase().includes($("search").value.trim().toLowerCase());}
 function navigate(id=null){
+  if(globalThis.LectureMindmap&&!LectureMindmap.canLeave())return;
+  globalThis.LectureMindmap?.reset();
+  globalThis.Courseware?.reset();
   if(!id)focusedEventId=null;
   selected=id;detail=null;detailStamp=0;
   const url=new URL(location.href);
@@ -66,13 +79,14 @@ function navigate(id=null){
     $("detail-meta").textContent="连接恢复后会自动显示这节课的笔记";
     $("detail-warning").textContent="";$("detail-warning").hidden=true;
     $("analysis-progress").hidden=true;$("lesson-versions").replaceChildren();
+    globalThis.LectureCompare?.reset();
     $("view-summary").replaceChildren();$("view-events").replaceChildren();$("view-transcript").replaceChildren();
     document.querySelector(".version-panel").hidden=true;document.querySelector(".detail-actions").hidden=true;document.querySelector(".tabs").hidden=true;
     void refreshDetail();
   }else renderLibrary();
   window.scrollTo({top:0,behavior:"instant"});
 }
-function showView(view){for(const item of document.querySelectorAll("[data-view]")){const on=item.dataset.view===view;item.classList.toggle("active",on);item.setAttribute("aria-selected",String(on));$("view-"+item.dataset.view).hidden=!on;}}
+function showView(view){for(const item of document.querySelectorAll("[data-view]")){const on=item.dataset.view===view;item.classList.toggle("active",on);item.setAttribute("aria-selected",String(on));$("view-"+item.dataset.view).hidden=!on;}if(view==="mindmap")globalThis.LectureMindmap?.activate();}
 function openLesson(id,view="summary",eventId=null){focusedEventId=eventId;navigate(id);showView(view);}
 function courseButton(id,title,count,notes){const b=node("button",undefined,"course-choice"+(course===id?" active":""));b.append(node("strong",title),node("small",count+" 节课 · "+notes+" 份笔记"));b.setAttribute("aria-pressed",String(course===id));b.onclick=()=>{course=id;navigate();};return b;}
 function renderLibrary(){
@@ -104,7 +118,7 @@ function renderLibrary(){
       card.append(foot);target.append(card);
     }
   }else{
-    const rows=all.filter(s=>(filter!=="pending"||s.lesson_pending)&&matches([s.course_title,s.title,s.summary,s.important_events])).sort((a,b)=>b.start_at-a.start_at||b.created_at-a.created_at);
+    const rows=all.filter(s=>(filter!=="pending"||s.lesson_pending)&&matches([s.course_title,s.title,s.summary,s.important_events])).sort(L.compareLessons);
     for(const s of rows){
       if(s.isImport){const card=node("article",undefined,"note-card import-card");card.append(node("div",s.course_title,"note-meta"),node("h3",s.title),node("span",s.status==="failed"?"导入未完成":"正在读取学校数据","note-state pending"),node("p",s.error||"尚未交给本地处理。请保持浏览器、学校课时标签页和本地服务运行。"));
         const link=node("a",s.status==="failed"?"返回本节课重新导入 ↗":"打开学校课时 ↗","text-button");link.href=s.page_url;link.target="_blank";link.rel="noopener noreferrer";card.append(link);target.append(card);continue;}
@@ -157,17 +171,18 @@ function renderDetail(){
     summary.append(node("p",topics.length+" 条分段笔记"+(partial?" · 后续内容仍在整理":"")+" · 点击时间定位回放","overview-intro"));
     const list=node("div",undefined,"topic-notes");
     for(const [index,t] of topics.entries()){const card=node("details",undefined,"topic-note"),top=node("header");card.id="topic-"+index;
-      top.append(seek(t.start));if(t.chapter)top.append(node("span",t.chapter,"chapter-tag"));
-      card.append(node("summary",t.title),top,node("p",t.detail));list.append(card);
+      const compare=node("button","课件 · 原话 · 笔记 ↗");compare.onclick=()=>{showView("compare");globalThis.LectureCompare?.select(index);};
+      top.append(seek(t.start),compare);if(t.chapter)top.append(node("span",t.chapter,"chapter-tag"));
+      card.append(node("summary",t.title),top,LectureCompare.markdown(t.detail));list.append(card);
     }
     if(!topics.length)list.append(node("p",detail.summary.overview||"本段未提取到独立知识点。","overview-intro"));
     const all=node("details",undefined,"all-notes");all.open=!detail.summary.groups?.length;all.append(node("summary","全部分段笔记 · "+topics.length),list);
-    if(detail.summary.groups?.length){const groups=node("div",undefined,"theme-grid");for(const g of detail.summary.groups){const card=node("article",undefined,"theme-card");card.append(node("h3",g.title),node("p",g.detail));const refs=node("div",undefined,"theme-refs");for(const index of g.topic_indices||[]){if(!topics[index])continue;const link=node("button",topics[index].title);link.onclick=()=>{all.open=true;const target=list.children[index];target.open=true;target.scrollIntoView({block:"center",behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"instant":"smooth"});};refs.append(link);}card.append(refs);groups.append(card);}summary.append(groups);}
+    if(detail.summary.groups?.length){const groups=node("div",undefined,"theme-grid");for(const g of detail.summary.groups){const card=node("article",undefined,"theme-card");card.append(node("h3",g.title),LectureCompare.markdown(g.detail));const refs=node("div",undefined,"theme-refs");for(const index of g.topic_indices||[]){if(!topics[index])continue;const link=node("button",topics[index].title);link.onclick=()=>{all.open=true;const target=list.children[index];target.open=true;target.scrollIntoView({block:"center",behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"instant":"smooth"});};refs.append(link);}card.append(refs);groups.append(card);}summary.append(groups);}
     summary.append(all);
   }else{
     const empty=node("div",undefined,"library-empty"),action=L.action({...detail,segment_count:detail.segments.length},configured);
     empty.append(node("h3",busy?"正在阅读本课字幕":detail.analysis_status==="failed"?"笔记生成中断":"本课笔记尚未生成"),
-      node("p",busy?"第一段完成后会自动显示，页面可以关闭。":!configured?"在设置中保存一次 DeepSeek Key，现有和今后保存的字幕都会自动生成笔记。":detail.analysis_status==="failed"?"上方显示了具体原因。点击“继续生成笔记”会复用已经完成的部分。":"本课已交给后台自动整理，无需点击生成。可以关闭页面，稍后到课程笔记查看。"));
+      node("p",busy?"第一段完成后会自动显示，页面可以关闭。":!configured?`在设置中保存一次 ${llmLabel} Key，现有和今后保存的字幕都会自动生成笔记。`:detail.analysis_status==="failed"?"上方显示了具体原因。点击“继续生成笔记”会复用已经完成的部分。":"本课已交给后台自动整理，无需点击生成。可以关闭页面，稍后到课程笔记查看。"));
     if(action.disabled&&!busy)empty.append(node("small",action.label));
     summary.append(empty);
   }
@@ -193,7 +208,17 @@ function renderDetail(){
   const candidates=detail.rule_candidates||detail.events.filter(e=>e.source==="local_rule");
   if(candidates.length){const initial=node("details",undefined,"rule-candidates");initial.append(node("summary","关键词初筛 · "+candidates.length+" 处（不代表有任务）"));for(const e of candidates){const p=node("p");p.append(seek(e.start),document.createTextNode(" "+e.evidence));initial.append(p);}events.append(initial);}
   const transcript=$("view-transcript"),scroll=transcript.scrollTop;transcript.replaceChildren();
-  for(const s of detail.segments){const el=node("div",undefined,"segment");el.append(seek(s.start),node("span",SessionView.clean(s)));transcript.append(el);}transcript.scrollTop=scroll;
+  for(const s of detail.segments){const el=node("div",undefined,"segment"),jump=node("button","查看课件","courseware-jump");jump.onclick=()=>{showView("compare");globalThis.Courseware?.selectSegment(s.id);};el.append(seek(s.start),node("span",SessionView.clean(s)),jump);transcript.append(el);}transcript.scrollTop=scroll;
+  globalThis.LectureCompare?.mount($("view-compare"),detail,seek,{
+    notice:text=>status(text),
+    saved:async()=>{detailStamp=0;await refreshDetail();}
+  });
+  let alignment=$("courseware-alignment");if(!alignment){alignment=node("section",undefined,"courseware-panel");alignment.id="courseware-alignment";$("view-compare").prepend(alignment);}
+  globalThis.Courseware?.mount(alignment,detail,seek,{notice:text=>status(text),saved:async()=>{detailStamp=0;await refreshDetail();}});
+  if(params.get("segment")){globalThis.Courseware?.selectSegment(params.get("segment"));params.delete("segment");}
+  globalThis.LectureMindmap?.mount($("view-mindmap"),detail,{
+    topic:index=>{showView("compare");globalThis.LectureCompare?.select(index);}
+  });
   renderAction();
 }
 async function refreshDetail(){if(!selected)return;const id=selected;try{const value=await A.api("/api/sessions/"+id);if(id!==selected)return;if(value.deleted_at){navigate();status("这份字幕已移到回收站，可恢复后查看。");return;}if(value.superseded_by){navigate(value.superseded_by);return;}const stamp=JSON.stringify([value.updated_at,value.versions]);if(stamp!==detailStamp){detail=value;detailStamp=stamp;renderDetail();}}catch(e){if(id!==selected)return;if(!detail)$("detail-meta").textContent="这节课暂时无法读取，连接恢复后会自动重试。";status(e.message,true);}}
@@ -202,7 +227,7 @@ async function refresh(){
   try{
     const result=await Promise.all([A.api("/api/sessions"),A.api("/api/settings"),A.api("/api/imports"),A.api("/api/sessions?trash=true")]);
     completeSavedEvents(result[0]);
-    sessions=result[0];configured=result[1].deepseek_configured;imports=result[2];trashed=result[3];
+    sessions=result[0];configured=result[1].llm_configured??result[1].deepseek_configured;llmLabel=result[1].llm_label||"AI";imports=result[2];trashed=result[3];
     $("health").textContent="本地已连接";$("health").className="chip";
     clearConnectionNotice();
     const live=sessions.filter(s=>s.mode==="live"&&!s.stopped&&s.status==="recording");
@@ -249,3 +274,6 @@ $("stop-batch").onclick=()=>act($("stop-batch"),async()=>{await A.send("STOP_BAT
   else {$("batch-controls").hidden=true;$("batch-unavailable").hidden=false;}
   await refresh();if(params.get("import")==="1")$("import-dialog").showModal();setInterval(()=>void refresh(),3000);
 })();
+
+$("open-courseware").onclick=()=>Courseware.open(detail?.course_title||L.groups(L.lessons(sessions)).find(g=>g.id===course)?.title||"");
+if(params.get("view")==="compare")showView("compare");

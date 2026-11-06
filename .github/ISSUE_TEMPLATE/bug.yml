@@ -1,0 +1,22 @@
+name: 使用问题
+description: 启动、课程导入、转写或界面问题
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 软件版本与浏览器
+      placeholder: 例如 0.13.0 / Edge / Windows 11
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 发生了什么
+      description: 操作步骤、预期结果、实际结果。可以附已遮去个人信息的截图。
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: 错误文字
+      description: 不需要上传 API Key、Cookie、课程原文或个人数据库。

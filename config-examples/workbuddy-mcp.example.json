@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "scut-study": {
+      "type": "stdio",
+      "command": "C:/replace-with-project/.venv/Scripts/python.exe",
+      "args": ["-m", "assistant_service.study_agent.mcp", "--data-dir", "C:/replace-with-project/.local"],
+      "cwd": "C:/replace-with-project",
+      "timeout": 30000
+    }
+  }
+}

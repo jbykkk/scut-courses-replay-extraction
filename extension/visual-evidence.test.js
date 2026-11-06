@@ -1,0 +1,12 @@
+const assert=require("node:assert/strict");
+const {collectScutVisuals}=require("./visual-evidence.js");
+const page="https://video.jw.scut.edu.cn/livingroom?course_id=1&sub_id=2&tenant_code=21";
+global.location={href:page};
+const row=(time,url)=>({querySelector:q=>q===".ppt_time"?{textContent:time}:{getAttribute:name=>name==="data-src"?url:"placeholder.png"}});
+const url="https://video.jw.scut.edu.cn/play/ai3/ppt/20261027/a-b/123.jpg";
+global.document={title:"测试课",querySelectorAll:()=>[row("00:02:54",url),row("00:02:54",url),row("01:99:00",url),row("00:03:00","https://evil.example/a.jpg"),row("00:04:00",url+"?token=private")]};
+assert.deepEqual(collectScutVisuals(page).items,[{url,seconds:174}]);
+assert.match(collectScutVisuals(page.replace("sub_id=2","sub_id=3")).error,/切换/);
+global.document.querySelectorAll=()=>[];
+assert.match(collectScutVisuals(page).error,/PPT/);
+console.log("Timed PPT DOM collection: source, timestamp, dedupe and navigation guards pass.");

@@ -13,9 +13,9 @@
 | 版本 | 适合谁 | 包含什么 |
 | --- | --- | --- |
 | [0.13.0 Windows 预览包][release] | 想先安装使用 | 桌面入口、实时字幕、回放整理、课程笔记、本地资料问答、复习与导出 |
-| [最新开发分支][dev] | 想用刚完成的功能 | 上述功能，以及跨课时问答、今日复习清单、WorkBuddy 接入、公开资料核对 |
+| [最新源码（main）][dev] | 想用刚完成的功能 | 上述功能，以及跨课时问答、今日复习清单、课件对照、离线思维导图、WorkBuddy 接入、公开资料核对 |
 
-**0.13.0 安装包尚不包含开发版新增功能。** 当前 GitHub 默认分支也未合入这些改动；使用新功能请按下方“从源码运行”切换到开发分支。[开发进度见 PR #1][pr]。
+**0.13.0 安装包尚不包含源码中的新增功能。** 最新源码位于 GitHub 默认分支 `main`；使用新功能请按下方“从源码运行”安装。[合并记录见 PR #1][pr]。
 
 ![学习助手主界面][study-image]
 
@@ -57,14 +57,20 @@
 
 ## 下课后和复习时
 
+**整门课课件自动对应：** 在“课程笔记”页点击“整门课课件”，一次选择多个 PDF/PPTX 或整个课件文件夹，按需调整文件顺序。字幕保存后自动按语义和前后页序对应；新课件会补齐已有课时。支持从字幕跳课件页、从课件页查整门课讲解，无需先生成笔记。配置模型前提供标为待核对的关键词预匹配。[使用说明](manual/COURSEWARE.md)
+
 | 想做的事 | 怎么开始 |
 | --- | --- |
 | 找作业、测验、评分要求和课程安排 | 打开“课堂记录”，按课程查看重要事项，展开原文和时间段 |
 | 对照课件、题目和课堂讲解 | 添加文件、截图或本地路径，再问具体问题 |
-| 补上没听懂的内容 | 选定课程和主题，让它结合已有资料解释、出一道练习 |
+| 补上没听懂的内容 | 选定课程和主题，要求从头讲清来龙去脉；想练习时再出题 |
 | 定期回顾 | 将主题加入复习，结合之后的作答继续调整 |
 | 带走整理结果 | 导出笔记，或要求生成 PDF、Markdown 格式的复习资料与题目 |
 | 离开电脑后接收课堂事项 | 在设置中配对手机提醒端，允许通知并开启后台监听 |
+
+在“课程笔记”中打开一节课，选择 **课件与讲述对照 → 选择或上传本课课件**，勾选已有课件或上传 PDF，再点“结合所选课件生成笔记”。可按知识点同时查看课件原文与 PDF 原页、老师原话与回放时间、结合两者整理的笔记。未找到对应课件页时会明确提示；扫描版 PDF 需先做文字识别。导出的 Markdown 同样保留课件页码和老师原话。
+
+开发版可在同一课时选择 **思维导图**，从已有知识点笔记直接生成导图，无需额外调用模型。可展开、折叠、全屏查看，编辑并保存 Markdown 提纲，导出 Markdown、SVG 或 PNG。点击知识点和出处可回到课件与老师原话。笔记更新会保留手动提纲并提示过期。[思维导图使用说明](manual/MINDMAP.md)
 
 资料支持 PDF、PPTX、DOCX、TXT、Markdown 和图片。给出文件夹时会先列出可读文件供选择；原文件只读。图片理解需要支持图片输入的模型。
 
@@ -114,11 +120,19 @@ WorkBuddy 与学习网页共用本机资料索引。**查已有资料时，直�
 .\.venv\Scripts\python.exe scripts\prepare_workbuddy.py --install
 ```
 
-在 WorkBuddy 的 **专家·技能·连接器 → 连接器 → 自定义连接器** 中检查 `scut-study`，按提示保存配置并确认连接。应看到在线状态和 **10 个可用工具**。新对话输入 `/` 选择 `scut-study`，也可以直接说“使用 SCUT 学习助手”。
+在 WorkBuddy 的 **专家·技能·连接器 → 连接器 → 自定义连接器** 中检查 `scut-study`，按提示保存配置并确认连接。当前连接器为 **0.5.2，20 个工具**。更新后若仍显示旧数量，重新连接该连接器。只想听讲时直接说“完整讲解，不用出题”，该方式会随学习会话续接。新对话输入 `/` 选择 `scut-study`，也可以直接说“使用 SCUT 学习助手”。
 
-课堂出处、今日复习和公开教材核对已在 WorkBuddy 5.9.3 中完成实际对话测试。工具负责找资料和排程，由 WorkBuddy 自己的模型组织回答，不再重复调用本地 DeepSeek。
+可以直接开始一个学习目标：
 
-当前连接器提供查询、排程和公开资料取证；录音控制、批量处理、文件导出和任务状态修改继续在学习助手里操作。固定专家团和公开 Agent 链接尚未发布。[完整接入说明与工具列表][workbuddy]
+> 从头讲神经科学。概念旁给英文，把模型之间的联系讲清楚，每次先讲一部分再问我一道题。
+
+> 接着上次的进度。我还没分清那两个模型，先别给答案。
+
+学习会话记住实际讲到的主题、你的回答和下一步问题，换对话时可以接续；明确给出的自评会影响今日复习排序。课件、课堂原句和外部参考保留各自出处，来源更新后会提示重新核对。不会因为“读过了”就把一项记成已掌握，也不会把文字提到的板书当作已经看过的图。
+
+讲解会按问题和前置知识连续展开，词表用于回查。数学与代码的生成、转义和导出要求见[格式规程](planning/DOCUMENT_FORMAT.md)。工具负责检索与记录，由 WorkBuddy 自己的模型组织回答，不再重复调用本地 DeepSeek。课堂出处、今日复习和公开教材核对有 WorkBuddy 5.9.3 的历史对话测试；0.5.0 新增英文别名练习、课程索引刷新与布尔式检查；本轮验证范围见[接入与验证记录][workbuddy]。
+
+当前连接器提供查询、排程、公开资料取证和学习进度记录；录音控制、批量处理、文件导出和任务状态修改继续在学习助手里操作。固定专家团和公开 Agent 链接尚未发布。[设计与实现](planning/WORKBUDDY_AGENT.md) · [完整接入说明与工具列表][workbuddy]
 
 ## 模型和个人数据
 
@@ -154,17 +168,17 @@ WorkBuddy 与学习网页共用本机资料索引。**查已有资料时，直�
 
 ## 从源码运行
 
-最新学习助手功能目前位于 `codex/student-agent-foundation` 分支。需要 Git、[uv](https://docs.astral.sh/uv/) 和 Windows；回归检查另需 Node.js。
+最新学习助手功能位于 `main` 分支。需要 Git、[uv](https://docs.astral.sh/uv/) 和 Windows；回归检查另需 Node.js。
 
 ```powershell
-git clone --branch codex/student-agent-foundation --single-branch https://github.com/PoesisQ/bbt_SCUT_admin.git
+git clone https://github.com/PoesisQ/bbt_SCUT_admin.git
 cd bbt_SCUT_admin
 uv sync --extra asr --extra study --python 3.12
 # 首次创建桌面与开始菜单入口，以后从图标打开
 .\install-desktop.ps1
 ```
 
-仅调试服务时运行 `uv run --extra asr --extra study python -m assistant_service`，本地页面为 `http://127.0.0.1:8765/study.html`。停止服务前先结束录音和处理任务，再运行 `stop-assistant.ps1`。更新源码后重新启动服务，并在浏览器扩展管理页重新加载扩展。
+仅调试服务时运行 `uv run --extra asr --extra study python -m assistant_service`，本地页面为 `http://127.0.0.1:8765/study.html`。停止服务前先结束录音和处理任务，再双击项目文件夹中的 `停止课堂助手.cmd`，或运行 `stop-assistant.ps1`。更新源码后重新启动服务，并在浏览器扩展管理页重新加载扩展。
 
 <details>
 <summary>检查、打包与原版字幕命令</summary>
@@ -172,6 +186,8 @@ uv sync --extra asr --extra study --python 3.12
 ```powershell
 # Python、JavaScript 回归及格式检查
 uv run --extra study python scripts/check.py
+# 检查学习稿公式，并用本地排版生成打印PDF
+uv run --extra study python scripts/check_study_document.py source.md --render-check --pdf print.pdf
 # 浏览器扩展 ZIP
 uv run python scripts/package_extension.py
 # Windows x64 安装包
@@ -198,7 +214,7 @@ uv run main.py get --all "课程链接"
 - **字幕已经有了，笔记分析失败**：检查模型配置后继续生成笔记，不必重新转写整节课。
 - **关闭窗口后，怎么回去**：重新打开桌面入口或点扩展图标即可；不要为了打开面板而重新加载正在录音的扩展。
 - **手机已配对，但收不到提醒**：配对只表示保存了连接信息。检查后台监听、通知权限和网络；VPN 也可能影响中继连接。
-- **WorkBuddy 查不到一门课**：先在学习助手里导入并同步资料；它只能检索已建立索引的内容。
+- **WorkBuddy 查不到一门课**：先在学习助手导入资料。已有课堂文字但索引不齐时，连接器会提示，可只刷新这门课的索引；不会重新录音或转写。
 
 反馈问题时请附版本、操作步骤和错误文字，不要提交 API Key、学校 Cookie 或个人数据库。
 
@@ -210,16 +226,16 @@ uv run main.py get --all "课程链接"
 [release]: https://github.com/PoesisQ/bbt_SCUT_admin/releases/tag/v0.13.0
 [android]: https://github.com/PoesisQ/bbt_SCUT_admin/releases/download/v0.10.7/SCUT-Classroom-Alerts-v0.10.7.apk
 [issues]: https://github.com/PoesisQ/bbt_SCUT_admin/issues
-[dev]: https://github.com/PoesisQ/bbt_SCUT_admin/tree/codex/student-agent-foundation
+[dev]: https://github.com/PoesisQ/bbt_SCUT_admin/tree/main
 [pr]: https://github.com/PoesisQ/bbt_SCUT_admin/pull/1
-[start]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/manual/START.md
-[workbuddy]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/workbuddy/README.md
-[mobile]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/mobile/README.md
-[changelog]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/CHANGELOG.md
-[design]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/planning/STUDY_TECHNICAL.md
-[site]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/SITE_FINDINGS.md
-[validation]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/VALIDATION.md
-[releasing]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/codex/student-agent-foundation/manual/RELEASING.md
+[start]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/manual/START.md
+[workbuddy]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/workbuddy/README.md
+[mobile]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/mobile/README.md
+[changelog]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/CHANGELOG.md
+[design]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/planning/STUDY_TECHNICAL.md
+[site]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/SITE_FINDINGS.md
+[validation]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/VALIDATION.md
+[releasing]: https://github.com/PoesisQ/bbt_SCUT_admin/blob/main/manual/RELEASING.md
 [study-image]: https://raw.githubusercontent.com/PoesisQ/bbt_SCUT_admin/59ac3f008901249b98858e4ce0f3bd99373101cc/manual/images/02-study.png
 [school-image]: https://raw.githubusercontent.com/PoesisQ/bbt_SCUT_admin/59ac3f008901249b98858e4ce0f3bd99373101cc/manual/images/03-school.png
 [task-image]: https://raw.githubusercontent.com/PoesisQ/bbt_SCUT_admin/59ac3f008901249b98858e4ce0f3bd99373101cc/manual/images/05-task.png

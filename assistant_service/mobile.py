@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .settings import atomic_json
+from .study_agent.reviews import ReviewScheduler
 
 APP_ID = "scut-classroom"
 RELAY_URL = "https://ironegg.vercel.app"
@@ -77,6 +78,7 @@ class MobileNotifier:
         self.last_error = ""
         self.last_success = 0.0
         self.state = self._load()
+        self.study_reviews = ReviewScheduler(settings.root)
 
     def _load(self):
         try:
@@ -123,13 +125,23 @@ class MobileNotifier:
         if self.state["pairing"] != identity:
             self.state = {"version": 1, "pairing": identity, "sent": {}, "outbox": []}
         message_id, wire = seal(pairing, kind, data)
-        self.state["outbox"].append({"id": message_id, "wire": wire})
+        item = {"id": message_id, "wire": wire}
+        if data.get("source") == "study-review":
+            item["study_alert_id"] = data["id"]
+        self.state["outbox"].append(item)
         self.state["sent"][dedupe] = int(time.time())
         self.state["sent"] = dict(list(self.state["sent"].items())[-2000:])
         self._save()
         return True
 
     def scan(self):
+        # Same background lane as the phone outbox: no competing JSON writers.
+        # Local review inbox still advances when mobile delivery is disabled.
+        try:
+            self.study_reviews.tick(self)
+            self.study_reviews.last_error = ""
+        except Exception as exc:
+            self.study_reviews.last_error = type(exc).__name__
         pairing = self.settings.mobile_pairing()
         if not pairing or not self.settings.data.get("mobile_notifications_enabled"):
             return
@@ -163,7 +175,17 @@ class MobileNotifier:
         pairing = self.settings.mobile_pairing()
         if not pairing or not self.state["outbox"]:
             return
-        item = self.state["outbox"][0]
+        item = None
+        for candidate in list(self.state["outbox"]):
+            decision = self.study_reviews.delivery_state(candidate["study_alert_id"]) if candidate.get("study_alert_id") else "send"
+            if decision == "discard":
+                self.state["outbox"].remove(candidate)
+                self._save()
+            elif decision == "send":
+                item = candidate
+                break
+        if item is None:
+            return False  # Quiet reviews must not block later urgent classroom alerts.
         url = f"{pairing['relay_url']}/api/apps/{pairing['app_id']}/push"
         with httpx.Client(timeout=15, transport=self.transport, trust_env=False,
                           proxy=relay_proxy() if self.transport is None else None) as client:
@@ -171,9 +193,12 @@ class MobileNotifier:
                 "channel": pairing["channel"], "direction": "to-phone", "id": item["id"], "wire": item["wire"]})
         if response.status_code != 201 or response.json().get("ok") is not True:
             raise ValueError(f"手机中继 HTTP {response.status_code}")
-        self.state["outbox"].pop(0)
+        self.state["outbox"].remove(item)
+        if item.get("study_alert_id"):
+            self.study_reviews.delivered(item["study_alert_id"])
         self._save()
         self.last_success, self.last_error = time.time(), ""
+        return True
 
     def test(self):
         stamp = int(time.time())
@@ -188,7 +213,8 @@ class MobileNotifier:
             try:
                 self.scan()
                 while self.state["outbox"] and not self.stop.is_set():
-                    self.flush()
+                    if self.flush() is False:
+                        break
                 failures = 0
             except Exception as exc:
                 self.last_error = str(exc)[:160]

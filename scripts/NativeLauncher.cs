@@ -22,7 +22,7 @@ public static class NativeLauncher {
     static Dictionary<string,object> ReadJson(string path) { return Json.Deserialize<Dictionary<string,object>>(File.ReadAllText(path,Encoding.UTF8)); }
     static Dictionary<string,object> Health(string token=null) {
         try {
-            var request=(HttpWebRequest)WebRequest.Create("http://127.0.0.1:8765/"+(token==null?"health":"api/health"));
+            var request=(HttpWebRequest)WebRequest.Create("http://127.0.0.1:8765/"+(token==null?"health":"api/health?brief=true"));
             request.Proxy=null; request.Timeout=1500; request.ReadWriteTimeout=1500;
             if(token!=null)request.Headers["Authorization"]="Bearer "+token;
             using(var response=request.GetResponse())using(var reader=new StreamReader(response.GetResponseStream()))
@@ -53,7 +53,7 @@ public static class NativeLauncher {
         if(health==null)return new {ok=false,error="服务尚未就绪，请查看 .local/launcher.log 中的启动原因"};
         if(!health.ContainsKey("app") || (string)health["app"]!="scut-local-assistant")throw new Exception("本地端口被其他程序占用");
         string stateRoot=Environment.GetEnvironmentVariable("SCUT_ASSISTANT_HOME");
-        if(String.IsNullOrEmpty(stateRoot))stateRoot=Path.Combine(Root,".local");
+        if(String.IsNullOrEmpty(stateRoot))stateRoot=File.Exists(Path.Combine(Root,"installed.json"))?Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"SCUTClassroomAssistant","data"):Path.Combine(Root,".local");
         var settings=ReadJson(Path.Combine(stateRoot,"settings.json"));string token=(string)settings["token"];
         if(Health(token)==null)throw new Exception("服务与本机连接配置不一致，请检查是否启动了另一份项目");
         return new {ok=true,token=token,version=health["version"]};

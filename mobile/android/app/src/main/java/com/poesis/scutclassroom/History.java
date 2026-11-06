@@ -15,5 +15,7 @@ final class History {
         Pairing.prefs(c).edit().putString("history",fresh.toString()).apply(); return true;
     }
     static JSONArray list(Context c){try{return new JSONArray(Pairing.prefs(c).getString("history","[]"));}catch(Exception e){return new JSONArray();}}
-    static void clear(Context c){Pairing.prefs(c).edit().remove("history").apply();}
+    static boolean isRead(Context c,String id){try{JSONArray ids=new JSONArray(Pairing.prefs(c).getString("read_ids","[]"));for(int i=0;i<ids.length();i++)if(id.equals(ids.optString(i)))return true;}catch(Exception ignored){}return false;}
+    static synchronized void setRead(Context c,String id,boolean read){JSONArray result=new JSONArray();try{JSONArray old=new JSONArray(Pairing.prefs(c).getString("read_ids","[]"));if(read)result.put(id);for(int i=0;i<Math.min(old.length(),399);i++)if(!id.equals(old.optString(i)))result.put(old.optString(i));}catch(Exception ignored){}Pairing.prefs(c).edit().putString("read_ids",result.toString()).apply();}
+    static void clear(Context c){Pairing.prefs(c).edit().remove("history").remove("read_ids").apply();}
 }

@@ -8,6 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+scripts/markmap/node_modules/
 
 # Auth state (contains session cookies)
 data/
@@ -28,3 +29,18 @@ docs/
 !.env.example
 extension/local-connection.js
 mobile/android/.gradle/
+
+# Competition originals and personal study experiments stay local
+AgenticStuff/*.docx
+.test-tmp/
+study-providers.json
+
+# Local execution traces and study databases may contain course text
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Bundled distributions and desktop executables
+runtime/
+SCUT学习助手.exe
+installed.json

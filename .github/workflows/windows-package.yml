@@ -1,0 +1,44 @@
+name: Windows download packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: '3.12'
+      - run: uv sync --extra study --locked
+      - run: uv run --extra study python scripts/check.py
+      - run: uv run --extra study python scripts/package_extension.py
+      - run: uv run --extra study python scripts/build_windows.py
+      - name: Write SHA-256 checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File | Where-Object Extension -in '.exe','.zip' | ForEach-Object {
+            $packageHash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$packageHash  $($_.Name)"
+          } | Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-downloads
+          path: |
+            dist/SCUT-Study-*.exe
+            dist/SCUT-Study-*-windows-x64.zip
+            dist/scut-classroom-assistant-*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
