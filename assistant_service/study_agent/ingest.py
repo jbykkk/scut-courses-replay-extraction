@@ -121,7 +121,9 @@ def import_file(store, root, relative, course):
                              fingerprint=fingerprint, chunks=extract(path))
 
 
-def sync_sessions(study, sessions):
+def sync_sessions(study, sessions, *, course=""):
+    if course:
+        sessions=[s for s in sessions if (s.get('course_title') or '未分类课程')==course]
     count = duplicates = 0
     active_origins = set()
     for session in sessions:
@@ -165,7 +167,8 @@ def sync_sessions(study, sessions):
         count += int(not result["duplicate"])
     # Deleted/superseded classroom records stop participating in new answers.
     with study.connect() as db:
-        for row in db.execute("SELECT id,origin FROM sources WHERE active=1 AND origin LIKE 'session:%'").fetchall():
+        for row in db.execute("SELECT id,origin FROM sources WHERE active=1 AND origin LIKE 'session:%'"+
+                              (" AND course=?" if course else ""),(course,) if course else ()).fetchall():
             if row["origin"] not in active_origins:
                 db.execute("UPDATE sources SET active=0 WHERE id=?", (row["id"],))
     return {"imported": count, "unchanged": duplicates}

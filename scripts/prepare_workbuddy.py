@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -15,7 +16,22 @@ sys.path.insert(0, str(ROOT))
 
 def install_local(config, output, target, *, skill_root=None):
     """Merge one named server and our skill, with local backups. No trust bypass."""
+    resource_root = Path(skill_root or ROOT / "workbuddy/skills/scut-study").resolve()
+    source = resource_root / "SKILL.md"
+    text = source.read_text(encoding="utf-8")
+    resources = [source] + sorted((resource_root / "references").rglob("*.md"))
+    for item in resources:
+        if item.is_symlink() or not item.resolve().is_relative_to(resource_root) or item.stat().st_size > 1000000:
+            raise ValueError("技能资源超出范围或大小限制，未安装")
+    for name in re.findall(r"references/[A-Za-z0-9_./-]+\.md", text):
+        path = resource_root / name
+        if not path.resolve().is_relative_to(resource_root) or not path.is_file():
+            raise ValueError("技能引用的规程不存在，未修改配置：" + name)
     target = Path(target).expanduser().resolve()
+    for item in resources:
+        destination = target / "skills/scut-study" / item.relative_to(resource_root)
+        if destination.is_symlink() or not destination.resolve().is_relative_to(target):
+            raise ValueError("技能目标路径异常，未修改配置")
     path = target / "mcp.json"
     previous = path.read_bytes() if path.exists() else None
     current = json.loads(previous.decode("utf-8-sig")) if previous else {}
@@ -39,13 +55,28 @@ def install_local(config, output, target, *, skill_root=None):
         temp = target / ("mcp.scut-" + str(time.time_ns()) + ".tmp")
         temp.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temp, path)
-    source = Path(skill_root or ROOT / "workbuddy/skills/scut-study") / "SKILL.md"
     skill = target / "skills/scut-study/SKILL.md"
-    if not skill.exists() or skill.read_bytes() != source.read_bytes():
-        if skill.exists():
-            backups.mkdir(parents=True, exist_ok=True); (backups / "SKILL.md").write_bytes(skill.read_bytes())
-        skill.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(source, skill)
-    return {"config": str(path), "skill": str(skill), "changed": changed,
+    copied = []
+    for item in resources:
+        relative = item.relative_to(resource_root)
+        destination = skill.parent / relative
+        data = item.read_bytes()
+        previous_data = destination.read_bytes() if destination.exists() else None
+        if previous_data == data: continue
+        if destination.is_symlink() or not destination.resolve().is_relative_to(target):
+            raise ValueError("技能目标路径异常，未覆盖")
+        if previous_data is not None:
+            backup = backups / "skill" / relative
+            backup.parent.mkdir(parents=True, exist_ok=True); backup.write_bytes(previous_data)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temp = destination.with_name(destination.name + ".scut-" + str(time.time_ns()) + ".tmp")
+        temp.write_bytes(data)
+        if (destination.read_bytes() if destination.exists() else None) != previous_data:
+            temp.unlink()
+            raise ValueError("技能文件刚被修改，请重试；未覆盖")
+        os.replace(temp, destination)
+        copied.append(relative.as_posix())
+    return {"config": str(path), "skill": str(skill), "changed": changed, "skill_files_changed": copied,
         "notice": "仅安装本地工具配置，保留其他连接器；如客户端要求信任，请由本人确认。"}
 
 

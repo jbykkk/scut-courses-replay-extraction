@@ -6,6 +6,8 @@ import re
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from .storage import terms
+from .concepts import expand_query
+from .index_state import index_status
 from ..telemetry import emit
 
 HOSTS = {"video.jw.scut.edu.cn", "video-jw-443.webvpn.scut.edu.cn"}
@@ -104,7 +106,8 @@ def _excerpt(evidence, variants):
 
 def classroom_evidence(store, course, query, limit=8):
     query = topic_query(query, course)
-    variants = query_variants(query)
+    expanded=expand_query(store,course,query)
+    variants = list(dict.fromkeys([*query_variants(query),*expanded['variants']]))[:10]
     emit("tool.start", "查找跨课时原句", {"tool": "find_classroom_mentions", "arguments": {"course": course, "query": query}})
     pool = {}
     for variant in variants:
@@ -139,15 +142,18 @@ def classroom_evidence(store, course, query, limit=8):
     return selected
 
 
-def mention_cards(evidence, query):
-    variants = query_variants(query)
+def mention_cards(evidence, query, variants=None):
+    variants = variants or query_variants(query)
     return [{"evidence_id": e["id"], "quote": (quote := _excerpt(e, variants)), **location(e, quote)} for e in evidence]
 
 
 def find_classroom_mentions(store, course, query, limit=8):
     query = topic_query(query, course)
     evidence = classroom_evidence(store, course, query, limit)
-    return {"course": course, "query": query, "items": mention_cards(evidence, query),
+    terminology=expand_query(store,course,query)
+    variants=list(dict.fromkeys([*query_variants(query),*terminology['variants']]))[:10]
+    return {"course": course, "query": query, "items": mention_cards(evidence, query, variants), "terminology":terminology,
+            "classroom_index":index_status(store,course),
             "notice": "原句来自字幕，可能含识别错误；定位只覆盖已导入的课堂记录。"}
 
 

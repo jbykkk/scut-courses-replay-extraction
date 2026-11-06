@@ -131,7 +131,7 @@ class StudyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_citations(value, {e["id"]: e})
 
-    def test_mcp_is_read_only_course_scoped_and_framed_as_json_lines(self):
+    def test_mcp_declares_bounded_writes_and_is_framed_as_json_lines(self):
         e = self.source()
         server = Server(self.study)
         self.assertIn("error", server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
@@ -145,7 +145,8 @@ class StudyTests(unittest.TestCase):
         responses = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertEqual(len(responses), 4)
         tools = responses[1]["result"]["tools"]
-        self.assertTrue(all(t["annotations"]["readOnlyHint"] for t in tools if t["name"] not in {"search_public_references", "read_public_reference"}))
+        self.assertEqual({t["name"] for t in tools if not t["annotations"]["readOnlyHint"]},
+                         {"search_public_references", "read_public_reference", "open_learning_session", "record_learning_progress", "refresh_course_index"})
         self.assertTrue(all(not t["annotations"]["destructiveHint"] for t in tools))
         self.assertIn(e["id"], responses[2]["result"]["content"][0]["text"])
         self.assertEqual(responses[3]["error"]["code"], -32602)
