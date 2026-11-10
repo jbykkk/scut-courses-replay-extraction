@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .storage import digest
 from .prompt_catalog import read as read_prompt, study_prompt
+from .concepts import expand_query
 from .context import evidence_payload, pack_evidence, history_context, select_memory
 from .classroom_search import classroom_evidence, mention_cards, attach_locations, topic_query
 from ..telemetry import RuntimeLog, compact, current, emit, model_start, model_finish, model_phase, phase, traced
@@ -270,7 +271,15 @@ def run_agent(store, provider, *, course, question, purpose="ask", history=None,
 
     def retrieve(query):
         emit("tool.start", "检索本课资料", {"tool":"search_sources", "arguments":{"query":query,"course":course}})
-        candidates = store.search(query, course, 12)
+        # Knowledge-base retrieval: course terminology aliases expand the FTS5 query,
+        # then chunks are diversified by source so one transcript cannot crowd out slides.
+        expanded = expand_query(store, course, query)["expanded_query"]
+        candidates = store.search(expanded, course, 12)
+        first, extra, sources = [], [], set()
+        for e in candidates:
+            (extra if e["source_id"] in sources else first).append(e)
+            sources.add(e["source_id"])
+        candidates = (first + extra)[:12]
         references = [e for e in candidates if e["kind"] not in {"asr", "school_subtitle", "image_reading", "student_report"}]
         references.sort(key=lambda e: not e.get("policy", {}).get("trusted"))
         lectures = classroom_evidence(store, course, query, 6) if purpose == "classroom" else []

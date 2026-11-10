@@ -1,5 +1,14 @@
 # WorkBuddy 验证记录
 
+## 0.5.3 · 2026-11-10
+
+- 新增 `tests/test_knowledge_base.py` 9项通过：课程与跨课程检索范围、证据ID和页码保留、术语别名扩展召回英文片段、`reasoner.retrieve()` 确实把扩展查询传给检索、组卷 slots 与规程、无原文不编题、参数校验、MCP 工具注册及 22工具/0.5.3 状态。
+- 相关回归分文件单独运行全部通过：`test_workbuddy_learning.py`（15项）、`test_study_dialogue.py` 与 `test_study_operations.py`（32项）。`git diff --check`、Python 编译检查、扩展 JS 语法/回归与 `core.test.js` 通过。
+- 全量 `unittest discover -s tests` 共327项、3项跳过：1项失败为 `test_mindmap.py` 离线资源校验和，在原始 HEAD 基线上同样失败；18项错误全部来自 `test_study_operations.py` 的 `tearDown` 清理临时目录——WorkBuddy 沙箱的 safe-delete 在 Windows 回收站不可用或达到本轮批量删除阈值后 fail-closed，不是断言失败，分文件运行时这些用例通过。两类问题均与本次改动无关，基线副本对比已确认前者。
+- 本机接入已执行：`scripts/prepare_workbuddy.py --install` 写入 `%USERPROFILE%\.workbuddy\mcp.json`（指向仓库 `.venv` 解释器、`scripts/study_mcp.py` 与 `.local` 资料库），保留其他连接器；已安装的 SKILL.md 与 7 份 references 与仓库源文件逐字节一致。本机原本没有资料库，先初始化了空的 `study-agent.sqlite3`，以便连接器可启动；课程数为 0，导入资料后才有内容。
+- 用真实配置启动 stdio 实测：`initialize` 返回 `0.5.3`、`tools/list` 返回 22 工具（含 `search_knowledge_base`、`prepare_quiz`）、`study_connection_status` 返回 0.5.3/22；两个新工具调用 `isError=false`，空资料库时分别返回空结果与 `needs_sources`，未编造内容。
+- 未验证：WorkBuddy 客户端 UI 重新连接后的真实对话（需本人重连连接器并新开对话）、真实模型出题效果、真实学校登录与录音、新 Windows 安装包。构建脚本要求 Windows + Python 3.12 + uv + .NET Framework 编译器，本机只有 Python 3.13 且无 uv，未在不符合条件的环境强行构建。工具协议与本机 stdio 实测不替代客户端验收。
+
 ## 0.5.2 · 2026-11-04
 
 - 260项Python测试通过；现有JavaScript语法/回归、Python编译和Git格式检查通过。10项格式测试（含2项实际浏览器PDF检查）包含Math/代码隔离、缩进、表格竖线、定界符/JSON转义、资料HTML转义、失败不发布以及MD数学预检查。

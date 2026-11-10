@@ -15,7 +15,7 @@ from .storage import digest
 from .concepts import expand_query, topic_key, catalog as concept_catalog
 from .index_state import index_status
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 MAX_CONTEXT = 16000
 
 

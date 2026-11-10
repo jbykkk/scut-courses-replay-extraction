@@ -24,6 +24,7 @@ docs/
 
 # Local assistant state, recordings, pairing tokens and secrets
 .local/
+.workbuddy/
 .env
 .env.*
 !.env.example

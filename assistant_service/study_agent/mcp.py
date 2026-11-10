@@ -14,6 +14,7 @@ from .research import search_public_references, read_public_reference, prepare_e
 from .tutoring import (VERSION, public_evidence, evidence_context, prepare_context,
                        list_materials, open_session, get_session, record_progress)
 from .concepts import list_concepts, prepare_term_practice, expand_query
+from .knowledge_base import search_knowledge_base, prepare_quiz
 from .index_state import refresh_index
 from .boolean_check import verify_boolean_design
 from ..telemetry import execution, emit
@@ -61,6 +62,14 @@ TOOLS = [
     tool("prepare_term_practice", "为一个已列出的concept_id返回有证据的名词解释、换名辨认和机制迁移题。每次只问一题等待作答，不自动给学生评分。", {
         "course": {"type":"string","minLength":1,"maxLength":160},
         "concept_id": {"type":"string","minLength":1,"maxLength":80}}),
+    tool("search_knowledge_base", "在本地知识库按关键词检索原文片段，返回带id、页码/时间、版本与可靠性状态的证据。course留空时跨课程检索；这是FTS5关键词与中文二字词检索，不是语义检索，命中不等于已核验。", {
+        "query": {"type": "string", "minLength": 1, "maxLength": 500},
+        "course": {"type": "string", "maxLength": 160},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 24}}, required=["query"]),
+    tool("prepare_quiz", "按知识库检索结果打包组卷证据、出题角度和规程，交给当前模型逐题出题。不调用模型、不自动判分、不写入已确认知识；无原文时明确返回缺口，不凭常识编题。", {
+        "course": {"type": "string", "minLength": 1, "maxLength": 160},
+        "topic": {"type": "string", "minLength": 1, "maxLength": 500},
+        "count": {"type": "integer", "minimum": 1, "maximum": 6}}, required=["course", "topic"]),
     tool("prepare_learning_context", "为一个学习问题打包同课多来源原文、覆盖缺口、已确认要求和任务，可带session_id续接进度。无二次模型调用，不声称读完整课或看过板书。", {
         "course": {"type": "string", "minLength": 1, "maxLength": 160},
         "topic": {"type": "string", "minLength": 1, "maxLength": 500},
@@ -164,7 +173,8 @@ class Server:
             return {"connected": True, "server_version": VERSION, "tools": len(TOOLS), "courses": len({s["course"] for s in self.store.sources()}),
                 "capabilities": {"learning_sessions": True, "context_neighbors": True, "local_progress": True,
                                  "automatic_grading": False, "raw_file_access": False, "notification_send": False,
-                                 "course_terminology": True, "term_wording_practice": True},
+                                 "course_terminology": True, "term_wording_practice": True,
+                                 "knowledge_base": True, "quiz_preparation": True},
                 "web_service_required": False, "scope": "本地已索引课程；新录音由课堂助手同步。公开检索独立检查网络。"}
         handlers = {"search_public_references": search_public_references, "read_public_reference": read_public_reference,
             "prepare_evidence_comparison": prepare_evidence_comparison, "find_classroom_mentions": find_classroom_mentions,
@@ -172,6 +182,7 @@ class Server:
             "read_study_evidence_context": evidence_context, "list_course_materials": list_materials, "open_learning_session": open_session,
             "get_learning_session": get_session, "record_learning_progress": record_progress,
             "list_course_concepts": list_concepts, "prepare_term_practice": prepare_term_practice,
+            "search_knowledge_base": search_knowledge_base, "prepare_quiz": prepare_quiz,
             "refresh_course_index": refresh_index}
         if name == 'verify_boolean_design':return verify_boolean_design(**args)
         if name in handlers: return handlers[name](self.store, **args)

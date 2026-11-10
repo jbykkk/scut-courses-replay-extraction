@@ -170,13 +170,13 @@ class WorkBuddyLearningTests(unittest.TestCase):
         server.handle({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})
         server.handle({"jsonrpc":"2.0","method":"notifications/initialized"})
         def call(name,args):return server.handle({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":args}})
-        self.assertEqual(len(TOOLS),20)
+        self.assertEqual(len(TOOLS),22)
         self.assertEqual(call("read_study_evidence_context",{"evidence_id":self.eid,"radius":3})["error"]["code"],-32602)
         s=self.session()
         args={"session_id":s["id"],"request_id":"bad","expected_revision":True,"topic":"x","evidence_ids":[]}
         self.assertEqual(call("record_learning_progress",args)["error"]["code"],-32602)
         status=json.loads(call("study_connection_status",{})["result"]["content"][0]["text"])
-        self.assertEqual(status["server_version"],"0.5.2")
+        self.assertEqual(status["server_version"],"0.5.3")
         self.assertFalse(status["capabilities"]["automatic_grading"])
 
     def test_mcp_learning_flow_can_resume_and_plan_without_a_second_model(self):
